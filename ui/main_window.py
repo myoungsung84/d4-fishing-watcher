@@ -8,7 +8,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from enum import Enum, auto
 from tkinter import ttk
-from typing import Callable, Optional
+from typing import Callable, Literal, TypedDict
 
 from app.logger import AppLogger
 from app.settings import (
@@ -30,6 +30,22 @@ from ui.windows import apply_windows_window_polish, get_window_work_area, set_wi
 
 LOGGER = logging.getLogger(__name__)
 
+RoiRect = tuple[int, int, int, int]
+SettingCaptureTarget = Literal["start", "stop", "social", "interact", "reel"]
+
+
+class CaptureTargetState(TypedDict):
+    name: SettingCaptureTarget | None
+
+
+class SelectionRectState(TypedDict):
+    id: int | None
+
+
+class DragStartState(TypedDict):
+    x: int | None
+    y: int | None
+
 
 class WorkerEventType(Enum):
     LOG = auto()
@@ -47,7 +63,7 @@ class WorkerEvent:
 class D4FishingWatcherWindow:
     def __init__(self) -> None:
         set_windows_app_user_model_id("D4FishingWatcher.App")
-        self.root = tk.Tk()
+        self.root: tk.Tk = tk.Tk()
         self.root.title("D4 Fishing Watcher")
         self.root.geometry("900x640")
         self.root.minsize(740, 560)
@@ -81,11 +97,11 @@ class D4FishingWatcherWindow:
 
         self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
         self.ui_callbacks: queue.Queue[Callable[[], None]] = queue.Queue()
-        self._fishing_worker: Optional[FishingWorker] = None
-        self._roi_window: Optional[tk.Toplevel] = None
-        self._hotkey_window: Optional[tk.Toplevel] = None
+        self._fishing_worker: FishingWorker | None = None
+        self._roi_window: tk.Toplevel | None = None
+        self._hotkey_window: tk.Toplevel | None = None
         self._worker_status = RunStatus.IDLE
-        self._detected_window_rect: Optional[WindowRect] = None
+        self._detected_window_rect: WindowRect | None = None
         self._settings: AppSettings = load_settings()
         engine.set_runtime_game_keys(self._settings.game_keys)
         self._hotkey_manager = GlobalHotkeyManager(
@@ -98,6 +114,11 @@ class D4FishingWatcherWindow:
 
         self.logger = AppLogger()
         engine.load_fishing_stats()
+
+        self.status_badge: ttk.Label
+        self.header_settings_button: ttk.Button
+        self.primary_button: ttk.Button
+        self.primary_hint_label: ttk.Label
 
         self._build_layout()
         self._set_runtime_state(RunStatus.IDLE, AppStage.IDLE)
@@ -198,7 +219,7 @@ class D4FishingWatcherWindow:
     def _configure_styles(self) -> None:
         apply_theme(self.root)
 
-    def _apply_window_icon(self, window: tk.Misc) -> None:
+    def _apply_window_icon(self, window: tk.Tk | tk.Toplevel) -> None:
         self._icons.apply_to(window)
 
     def _create_info_row(
@@ -334,7 +355,7 @@ class D4FishingWatcherWindow:
         interact_var = tk.StringVar(value=self._settings.game_keys.interact_pickup)
         reel_var = tk.StringVar(value=self._settings.game_keys.reel)
         message_var = tk.StringVar(value="변경을 누른 뒤 사용할 키 하나를 입력하세요.")
-        capture_target: dict[str, Optional[str]] = {"name": None}
+        capture_target: CaptureTargetState = {"name": None}
 
         frame = ttk.Frame(window, padding=(18, 16), style="Dialog.TFrame")
         frame.grid(row=0, column=0, sticky="nsew")
@@ -422,16 +443,16 @@ class D4FishingWatcherWindow:
             padx=(8, 0),
         )
 
-        def begin_capture(target: str) -> None:
+        def begin_capture(target: SettingCaptureTarget) -> None:
             capture_target["name"] = target
-            labels = {
+            labels: dict[SettingCaptureTarget, str] = {
                 "start": "낚시 시작",
                 "stop": "낚시 중지",
                 "social": "소셜 메뉴 호출",
                 "interact": "상호작용 / 줍기",
                 "reel": "낚싯대 회수",
             }
-            label = labels.get(target, "설정")
+            label = labels[target]
             message_var.set(f"{label} 키 입력 대기 중입니다. 사용할 키 하나를 누르세요. ESC는 취소입니다.")
             window.focus_force()
 
@@ -500,7 +521,7 @@ class D4FishingWatcherWindow:
             )
             close_window()
 
-        def on_key_press(event) -> str | None:
+        def on_key_press(event: tk.Event[tk.Misc]) -> str | None:
             target = capture_target["name"]
             if target is None:
                 return None
@@ -542,7 +563,7 @@ class D4FishingWatcherWindow:
 
     def _create_key_setting_row(
         self,
-        parent: ttk.Frame,
+        parent: tk.Misc,
         row: int,
         label_text: str,
         value_var: tk.StringVar,
@@ -628,7 +649,7 @@ class D4FishingWatcherWindow:
 
         self._ui_call(lambda rect=rect: self._handle_window_detection_result(rect))
 
-    def _handle_window_detection_result(self, rect: Optional[WindowRect]) -> None:
+    def _handle_window_detection_result(self, rect: WindowRect | None) -> None:
         if self._closing:
             return
 
@@ -680,8 +701,8 @@ class D4FishingWatcherWindow:
             font=("Malgun Gothic", 15, "bold"),
         )
 
-        selection_rect: dict[str, Optional[int]] = {"id": None}
-        drag_start: dict[str, Optional[int]] = {"x": None, "y": None}
+        selection_rect: SelectionRectState = {"id": None}
+        drag_start: DragStartState = {"x": None, "y": None}
 
         def clamp_point(x: int, y: int) -> tuple[int, int]:
             return max(0, min(rect.width, x)), max(0, min(rect.height, y))
@@ -691,7 +712,7 @@ class D4FishingWatcherWindow:
             start_y: int,
             end_x: int,
             end_y: int,
-        ) -> tuple[int, int, int, int]:
+        ) -> RoiRect:
             start_x, start_y = clamp_point(start_x, start_y)
             end_x, end_y = clamp_point(end_x, end_y)
             left = min(start_x, end_x)
@@ -700,7 +721,7 @@ class D4FishingWatcherWindow:
             bottom = max(start_y, end_y)
             return left, top, right - left, bottom - top
 
-        def on_press(event) -> None:
+        def on_press(event: tk.Event[tk.Misc]) -> None:
             start_x, start_y = clamp_point(int(event.x), int(event.y))
             drag_start["x"] = start_x
             drag_start["y"] = start_y
@@ -716,7 +737,7 @@ class D4FishingWatcherWindow:
                 width=3,
             )
 
-        def on_drag(event) -> None:
+        def on_drag(event: tk.Event[tk.Misc]) -> None:
             rect_id = selection_rect["id"]
             start_x = drag_start["x"]
             start_y = drag_start["y"]
@@ -725,7 +746,7 @@ class D4FishingWatcherWindow:
             end_x, end_y = clamp_point(int(event.x), int(event.y))
             canvas.coords(rect_id, start_x, start_y, end_x, end_y)
 
-        def on_release(event) -> None:
+        def on_release(event: tk.Event[tk.Misc]) -> None:
             start_x = drag_start["x"]
             start_y = drag_start["y"]
             if start_x is None or start_y is None:
@@ -741,7 +762,7 @@ class D4FishingWatcherWindow:
         window.bind("<ButtonPress-3>", lambda _event=None: self._finish_roi_selection(None))
         window.focus_force()
 
-    def _finish_roi_selection(self, roi: Optional[tuple[int, int, int, int]]) -> None:
+    def _finish_roi_selection(self, roi: RoiRect | None) -> None:
         window = self._roi_window
         self._roi_window = None
         if window is not None:
@@ -979,7 +1000,7 @@ class D4FishingWatcherWindow:
     def _set_runtime_state(
         self,
         status: RunStatus,
-        stage: Optional[AppStage] = None,
+        stage: AppStage | None = None,
     ) -> None:
         self._worker_status = status
         self.run_status_var.set(self._format_run_status(status))
@@ -1062,7 +1083,9 @@ class D4FishingWatcherWindow:
         return labels.get(status, status.value)
 
     @staticmethod
-    def _format_stage(stage: Optional[AppStage]) -> str:
+    def _format_stage(stage: AppStage | None) -> str:
+        if stage is None:
+            return "--"
         labels = {
             AppStage.IDLE: "게임 창 확인 대기",
             AppStage.WINDOW_DETECTION: "Diablo IV 창 확인 중",
@@ -1082,7 +1105,9 @@ class D4FishingWatcherWindow:
         return labels.get(stage, "--")
 
     @staticmethod
-    def _format_stage_detail(stage: Optional[AppStage]) -> str:
+    def _format_stage_detail(stage: AppStage | None) -> str:
+        if stage is None:
+            return "낚시가 진행 중입니다."
         labels = {
             AppStage.READY_TO_RUN: "낚시 엔진을 준비하고 있습니다.",
             AppStage.FIND_WINDOW: "Diablo IV 창 상태를 확인하고 있습니다.",
@@ -1096,7 +1121,7 @@ class D4FishingWatcherWindow:
         }
         return labels.get(stage, "낚시가 진행 중입니다.")
 
-    def _format_status_badge(self, status: RunStatus, stage: Optional[AppStage]) -> str:
+    def _format_status_badge(self, status: RunStatus, stage: AppStage | None) -> str:
         if status is RunStatus.IDLE and self._detected_window_rect is None:
             return "● 준비"
         if status in (RunStatus.IDLE, RunStatus.STOPPED) and engine.get_current_fishing_search_roi() is None:
@@ -1118,7 +1143,7 @@ class D4FishingWatcherWindow:
         return "● 대기"
 
     @staticmethod
-    def _format_detection_status(status: RunStatus, stage: Optional[AppStage]) -> str:
+    def _format_detection_status(status: RunStatus, stage: AppStage | None) -> str:
         if status is RunStatus.CHECKING_WINDOW:
             return "게임 창 확인 중"
         if status is RunStatus.SELECTING_ROI:
@@ -1143,7 +1168,7 @@ class D4FishingWatcherWindow:
         )
         self.window_detail_var.set(detail)
 
-    def _refresh_roi_status(self, override: Optional[str] = None) -> None:
+    def _refresh_roi_status(self, override: str | None = None) -> None:
         if override is not None:
             self.roi_status_var.set(self._format_roi_status_text(override))
             self._update_controls_for_state()

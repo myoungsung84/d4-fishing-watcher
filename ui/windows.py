@@ -4,9 +4,10 @@ import ctypes
 import logging
 import sys
 import tkinter as tk
-from typing import Optional
 
 LOGGER = logging.getLogger(__name__)
+
+WindowWorkArea = tuple[int, int, int, int]
 
 
 def apply_windows_window_polish(window: tk.Misc) -> None:
@@ -24,7 +25,7 @@ def set_windows_app_user_model_id(app_id: str) -> None:
         LOGGER.debug("Failed to set AppUserModelID", exc_info=True)
 
 
-def get_window_work_area(window: tk.Misc) -> Optional[tuple[int, int, int, int]]:
+def get_window_work_area(window: tk.Misc) -> WindowWorkArea | None:
     if sys.platform != "win32":
         return None
     try:

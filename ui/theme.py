@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 
-COLORS = {
+COLORS: dict[str, str] = {
     "bg": "#08111f",
     "panel": "#0e1b2d",
     "panel_alt": "#13243a",
@@ -22,14 +22,14 @@ COLORS = {
 }
 
 
-def apply_theme(root: tk.Misc) -> None:
+def apply_theme(root: tk.Tk | tk.Toplevel) -> None:
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
     except tk.TclError:
         pass
 
-    root.configure(bg=COLORS["bg"])
+    root.configure(background=COLORS["bg"])
     style.configure(".", background=COLORS["bg"], foreground=COLORS["text"], font=("Segoe UI", 10))
     style.configure("TFrame", background=COLORS["bg"])
     style.configure("Panel.TFrame", background=COLORS["panel"])

@@ -4,7 +4,6 @@ import logging
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from app.paths import get_resource_path
 
@@ -25,16 +24,16 @@ def get_app_icon_path(*parts: str) -> Path:
 
 @dataclass
 class TkAppIcons:
-    small: Optional[tk.PhotoImage] = None
-    medium: Optional[tk.PhotoImage] = None
-    large: Optional[tk.PhotoImage] = None
-    ico_path: Optional[Path] = None
+    small: tk.PhotoImage | None = None
+    medium: tk.PhotoImage | None = None
+    large: tk.PhotoImage | None = None
+    ico_path: Path | None = None
 
     @property
-    def header(self) -> Optional[tk.PhotoImage]:
+    def header(self) -> tk.PhotoImage | None:
         return self.medium or self.small or self.large
 
-    def apply_to(self, window: tk.Misc) -> None:
+    def apply_to(self, window: tk.Tk | tk.Toplevel) -> None:
         images = [image for image in (self.large, self.medium, self.small) if image is not None]
         try:
             if self.ico_path is not None and self.ico_path.exists():
