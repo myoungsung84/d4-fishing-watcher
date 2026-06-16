@@ -14,10 +14,12 @@ Diablo IV 낚시 자동화 보조 프로그램입니다. 현재 핵심 흐름은
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
-.\run.bat
+python -m app.main
 ```
 
-또는 다음처럼 직접 실행할 수 있습니다.
+`run.bat`도 현재는 GUI를 실행하지만, 앞으로의 기본 UX는 배치 파일이 아니라 메인 윈도우입니다.
+
+기존 콘솔/hotkey 중심 실행은 비교 기준으로 유지합니다.
 
 ```powershell
 python main.py
@@ -62,6 +64,10 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 
 ## 폴더 구조
 
+- `app/`: GUI 앱 진입점, 상태 enum, 경로 helper, 공용 logger
+- `ui/`: Tkinter 메인 윈도우
+- `core/`: 좌표 helper 재노출 및 향후 공용 로직 위치
+- `features/`: 향후 낚시 실행 엔진 분리 위치
 - `main.py`: 낚시 루프, hotkey, ROI 세션 상태, tracking/reacquire/timeout 흐름
 - `config.py`: 런타임 설정값
 - `detector.py`: template fallback 및 Ready HSV 색상 blob 감지
@@ -76,7 +82,8 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 문법 검사는 다음 명령으로 수행합니다.
 
 ```powershell
-python -m compileall config.py detector.py screen.py stats_overlay.py actions.py main.py
+python -m compileall .
+python -c "import app.main; import ui.main_window"
 ```
 
 이 프로그램은 실제 게임 화면, ROI 지정, HSV 색상 감지, Tkinter overlay, 키 입력 동작이 핵심이라 수동 검증이 중요합니다.
