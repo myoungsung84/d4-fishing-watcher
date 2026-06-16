@@ -43,10 +43,10 @@ class FishingWorkflowContext:
 class FishingEngine:
     """Boundary for the future UI/worker-driven fishing workflow.
 
-    The existing implementation in main.py still owns hotkeys, overlay lifetime,
-    global RuntimeState, and the concrete fishing loop. This class is intentionally
-    thin for now: it defines the callbacks and stop contract that the loop will use
-    when the cycle is moved out of main.py.
+    The legacy implementation in features.fishing.engine still owns hotkeys,
+    overlay lifetime, global RuntimeState, and the concrete fishing loop. This
+    class is intentionally thin for now: it defines the callbacks and stop
+    contract that the loop will use when the cycle is moved behind the worker.
     """
 
     def __init__(
@@ -70,7 +70,7 @@ class FishingEngine:
         self.context.state(RunStatus.RUNNING)
         self.context.step(AppStage.READY_TO_RUN)
         self.context.log("[ENGINE] workflow boundary ready")
-        self.context.log("[ENGINE] 실제 낚시 사이클은 아직 main.py에서 분리되지 않았습니다.")
+        self.context.log("[ENGINE] 실제 낚시 사이클은 아직 worker에 직접 연결되지 않았습니다.")
 
         if self.context.stop_requested():
             self.context.step(AppStage.STOPPING)

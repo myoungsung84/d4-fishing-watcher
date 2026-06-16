@@ -19,10 +19,10 @@ python -m app.main
 
 `run.bat`도 현재는 GUI를 실행하지만, 앞으로의 기본 UX는 배치 파일이 아니라 메인 윈도우입니다.
 
-기존 콘솔/hotkey 중심 실행은 비교 기준으로 유지합니다.
+기존 콘솔/hotkey 중심 실행은 비교 기준으로 유지하며, 패키지 entrypoint로 실행할 수 있습니다.
 
 ```powershell
-python main.py
+python -m app.legacy_console
 ```
 
 ## 단축키
@@ -53,7 +53,7 @@ READY_COLOR_HSV_LOWER = (70, 60, 120)
 READY_COLOR_HSV_UPPER = (95, 255, 255)
 ```
 
-오탐이 많으면 `config.py`에서 더 좁은 범위로 조정할 수 있습니다.
+오탐이 많으면 `app/config.py`에서 더 좁은 범위로 조정할 수 있습니다.
 
 ```python
 READY_COLOR_HSV_LOWER = (80, 90, 160)
@@ -65,7 +65,8 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 ## 폴더 구조
 
 - `app/`: GUI 앱 진입점, 상태 enum, 경로 helper, 공용 logger
-- `app/config.py`: 런타임 설정값. root `config.py`는 호환 wrapper입니다.
+- `app/config.py`: 런타임 설정값
+- `app/legacy_console.py`: 기존 콘솔/hotkey 실행 호환 entrypoint
 - `ui/`: Tkinter 메인 윈도우
 - `ui/overlay.py`: 기존 Tkinter overlay와 ROI 선택 UI
 - `core/`: Diablo IV 창 탐지, 화면 캡처, 좌표 helper
@@ -73,8 +74,6 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 - `features/fishing/engine.py`: legacy 콘솔 낚시 루프, hotkey, ROI 세션 상태, tracking/reacquire/timeout 흐름
 - `features/fishing/detector.py`: template fallback 및 Ready HSV 색상 blob 감지
 - `features/fishing/actions.py`: 키/마우스 입력 helper
-- `main.py`: legacy 콘솔 실행 호환 entrypoint
-- `config.py`, `detector.py`, `screen.py`, `actions.py`, `stats_overlay.py`: 기존 import 호환 wrapper
 - `templates/`: start/ready template fallback 이미지
 - `data/`: 런타임 데이터 폴더. 개인 통계 DB는 Git에서 제외됩니다.
 
@@ -91,7 +90,8 @@ python -c "import app.main; import ui.main_window"
 
 수동 확인 항목:
 
-- `run.bat` 실행
+- `python -m app.main` 또는 `run.bat` 실행
+- 필요 시 `python -m app.legacy_console` 실행
 - `PageUp` ROI 드래그 후 자동 시작
 - READY DEBUG에서 Ready color hits 표시 확인
 - `PageDown` 중단
@@ -100,7 +100,7 @@ python -c "import app.main; import ui.main_window"
 
 ## Tkinter Overlay 주의
 
-Tkinter 객체는 `stats_overlay.py`의 overlay UI thread에서만 생성/갱신/삭제합니다. 외부 스레드는 `OverlayController` queue에 command만 넣습니다. PageUp ROI 선택 오버레이도 새 `Tk()`를 만들지 않고 기존 root의 `Toplevel`로 생성합니다.
+Tkinter 객체는 `ui/overlay.py`의 overlay UI thread에서만 생성/갱신/삭제합니다. 외부 스레드는 `OverlayController` queue에 command만 넣습니다. PageUp ROI 선택 오버레이도 새 `Tk()`를 만들지 않고 기존 root의 `Toplevel`로 생성합니다.
 
 ## 튜닝 포인트
 
