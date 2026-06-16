@@ -125,7 +125,7 @@ class FishingTotalStats:
 class FishingStatsSnapshot:
     session_cast_count: int
     session_catch_count: int
-    session_fail_count: int
+    session_incomplete_count: int
     session_run_seconds: int
     total_cast_count: int
     total_catch_count: int
@@ -699,7 +699,7 @@ def get_fishing_stats_snapshot() -> FishingStatsSnapshot:
         total_catch_count = max(0, int(total_stats.total_catch_count))
         total_run_seconds = max(0, int(total_stats.total_run_seconds))
 
-    session_fail_count = max(0, session_cast_count - session_catch_count)
+    session_incomplete_count = max(0, session_cast_count - session_catch_count)
     session_run_seconds = 0
     if session_started_at is not None and session_is_running:
         session_run_seconds = int(max(0, (datetime.now() - session_started_at).total_seconds()))
@@ -709,7 +709,7 @@ def get_fishing_stats_snapshot() -> FishingStatsSnapshot:
     return FishingStatsSnapshot(
         session_cast_count=session_cast_count,
         session_catch_count=session_catch_count,
-        session_fail_count=session_fail_count,
+        session_incomplete_count=session_incomplete_count,
         session_run_seconds=session_run_seconds,
         total_cast_count=total_cast_count,
         total_catch_count=total_catch_count,

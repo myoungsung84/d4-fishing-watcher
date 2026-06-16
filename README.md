@@ -41,7 +41,7 @@ Diablo IV는 창 모드 또는 테두리 없는 창 모드로 실행하는 것�
 6. `PageUp` 또는 `시작` 버튼을 누르면 Diablo IV 창을 확인합니다.
 7. 창을 찾으면 Diablo IV 창 위에 영역 선택 UI가 표시됩니다.
 8. 낚시 감지에 사용할 영역을 드래그해 선택하면 낚시 엔진이 실행됩니다.
-9. 상태 카드와 최근 안내를 확인합니다.
+9. 현재 상태, 진행 단계, 누적 통계를 확인합니다.
 10. `PageDown` 또는 `중지` 버튼을 누르면 기존 엔진의 중지 플래그를 통해 현재 루프를 안전하게 빠져나옵니다.
 
 `current_fishing_search_roi`는 파일이나 프로필에 저장하지 않습니다. 실행 중에는 선택한 ROI를 유지하지만, 다음 시작 시에는 이전 ROI를 자동 재사용하지 않고 반드시 새로 선택합니다. 단, 같은 실행 안에서 30초 timeout 후 pull and recast를 반복할 때는 ROI를 유지합니다.
@@ -99,7 +99,15 @@ Diablo IV는 창 모드 또는 테두리 없는 창 모드로 실행하는 것�
 
 ## 앱 아이콘
 
-개발 실행에서는 루트의 `app-icon.png`를 창 아이콘으로 사용합니다. `app-icon.svg`는 원본 자산으로 유지합니다. 향후 PyInstaller EXE 자체 아이콘까지 적용하려면 같은 원본 SVG를 ICO로 변환한 뒤 빌드 옵션의 아이콘 경로에 지정하면 됩니다.
+개발 실행에서는 `assets/icons/app-icon.ico`와 `assets/icons/app-icon-circle.png`, `assets/icons/app-icon-circle-32.png`, `assets/icons/app-icon-circle-16.png`를 Tk 창 아이콘과 헤더 아이콘으로 사용합니다. `assets/icons/app-icon.svg`는 원본 자산으로 유지하고, `assets/icons/app-icon-original.png`는 원본 SVG 경로를 투명 배경으로 렌더링한 정적 자산입니다. 원형 아이콘은 검은 원본 도형을 흰색 원형 배경 위에 올린 파생 자산입니다.
+
+향후 PyInstaller EXE 자체 아이콘까지 적용하려면 `assets/icons/app-icon.ico`를 빌드 옵션의 아이콘 경로에 지정하면 됩니다.
+
+## 통계
+
+메인 화면 하단에는 `data/fishing_stats.db`에 저장된 누적 낚시 횟수와 누적 성공 횟수, 현재 실행 시간만 간단히 표시합니다. 통계 DB는 `daily_fishing_stats`와 `total_fishing_stats` 테이블을 사용하며, 낚시 실행이 종료될 때 현재 세션의 시도/성공/실행 시간이 누적값에 반영됩니다.
+
+UI는 SQLite를 직접 조회하지 않고 낚시 엔진의 통계 스냅샷을 표시합니다. 실패 또는 미완료 횟수는 저장 기준이 별도로 없으므로 메인 화면에서 추정 계산하지 않습니다.
 
 ## Ready 색상 감지
 
@@ -132,12 +140,13 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 - `features/fishing/detector.py`: template fallback 및 Ready HSV 색상 blob 감지
 - `features/fishing/actions.py`: 키/마우스 입력 helper
 - `templates/`: start/ready template fallback 이미지
+- `assets/icons/`: 앱 원본 아이콘과 Tk 창/헤더용 원형 아이콘
 - `data/`: 런타임 데이터 폴더. 개인 통계 DB는 Git에서 제외됩니다.
 - `logs/`: 날짜별 실행 로그가 생성되는 런타임 폴더
 
 ## 로그
 
-메인 윈도우의 최근 안내에는 사용자에게 필요한 주요 안내만 표시합니다. 개발용 상세 로그와 예외 traceback은 날짜별 파일에 저장합니다.
+메인 화면에는 긴 실행 로그를 표시하지 않습니다. 사용자가 조치해야 하는 상태는 현재 상태 영역에 짧게 표시하고, 개발용 상세 로그와 예외 traceback은 날짜별 파일에 저장합니다.
 
 - 저장 위치: `logs/YYYY-MM-DD.log`
 - 인코딩: UTF-8
@@ -189,7 +198,12 @@ Git에 포함하는 항목:
 - `requirements.txt`, `run.bat`, `README.md`, `.gitignore`
 - `templates/fishing_start_icon.png`
 - `templates/fishing_ready_icon.png`
-- `app-icon.svg`, `app-icon.png`
+- `assets/icons/app-icon.svg`
+- `assets/icons/app-icon-original.png`
+- `assets/icons/app-icon-circle.png`
+- `assets/icons/app-icon-circle-32.png`
+- `assets/icons/app-icon-circle-16.png`
+- `assets/icons/app-icon.ico`
 - `data/.gitkeep`
 
 Git에서 제외하는 항목:

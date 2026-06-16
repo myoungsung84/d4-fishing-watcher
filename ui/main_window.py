@@ -6,13 +6,11 @@ import re
 import threading
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum, auto
 from tkinter import ttk
 from typing import Callable, Optional
 
 from app.logger import AppLogger
-from app.paths import get_resource_path
 from app.settings import (
     AppSettings,
     DEFAULT_SETTINGS,
@@ -26,8 +24,9 @@ from core.hotkeys import GlobalHotkeyManager, normalize_tk_key
 from core.screen import WindowRect
 from features.fishing import engine
 from features.fishing.worker import FishingWorker
-from ui.theme import COLORS, apply_theme, configure_text_widget
-from ui.windows import apply_windows_window_polish, set_windows_app_user_model_id
+from ui.icons import TkAppIcons, load_tk_app_icons
+from ui.theme import COLORS, apply_theme
+from ui.windows import apply_windows_window_polish, get_window_work_area, set_windows_app_user_model_id
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,31 +49,31 @@ class D4FishingWatcherWindow:
         set_windows_app_user_model_id("D4FishingWatcher.App")
         self.root = tk.Tk()
         self.root.title("D4 Fishing Watcher")
-        self.root.geometry("880x620")
-        self.root.minsize(720, 560)
-        self._app_icon: Optional[tk.PhotoImage] = None
-        self._header_icon: Optional[tk.PhotoImage] = None
+        self.root.geometry("900x640")
+        self.root.minsize(740, 560)
+        self._icons: TkAppIcons = load_tk_app_icons()
         self._apply_window_icon(self.root)
         apply_windows_window_polish(self.root)
 
-        self.window_status_var = tk.StringVar(value="찾을 수 없음")
+        self.window_status_var = tk.StringVar(value="Diablo IV 창을 찾지 못했습니다")
         self.window_detail_var = tk.StringVar(value="찾을 수 없음")
         self.run_status_var = tk.StringVar(value=RunStatus.IDLE.value)
         self.stage_var = tk.StringVar(value=AppStage.IDLE.value)
-        self.roi_status_var = tk.StringVar(value="설정 필요")
-        self.status_badge_var = tk.StringVar(value="준비됨")
-        self.detail_var = tk.StringVar(value="Diablo IV 창을 확인하고 낚시 위치를 선택해 주세요.")
+        self.roi_status_var = tk.StringVar(value="게임 창을 먼저 확인해 주세요")
+        self.status_badge_var = tk.StringVar(value="● 확인 필요")
+        self.headline_var = tk.StringVar(value="Diablo IV 창을 찾지 못했습니다")
+        self.detail_var = tk.StringVar(value="게임을 실행한 뒤 다시 확인해 주세요.")
         self.last_message_var = tk.StringVar(value="아직 기록이 없습니다.")
         self.hotkey_summary_var = tk.StringVar(value="")
+        self.game_key_summary_var = tk.StringVar(value="")
         self.primary_action_var = tk.StringVar(value="낚시 시작")
         self.primary_hint_var = tk.StringVar(value="")
         self.cast_count_var = tk.StringVar(value="0회")
         self.catch_count_var = tk.StringVar(value="0회")
-        self.fail_count_var = tk.StringVar(value="0회")
         self.run_time_var = tk.StringVar(value="00:00")
-        self.progress_stage_var = tk.StringVar(value="준비")
-        self.recent_result_var = tk.StringVar(value="--")
-        self.detection_status_var = tk.StringVar(value="준비됨")
+        self.progress_stage_var = tk.StringVar(value="게임 창 확인 대기")
+        self.recent_result_var = tk.StringVar(value="기록 없음")
+        self.detection_status_var = tk.StringVar(value="대기 중")
 
         self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
         self.ui_callbacks: queue.Queue[Callable[[], None]] = queue.Queue()
@@ -94,16 +93,19 @@ class D4FishingWatcherWindow:
         self._max_notice_lines = 80
 
         self.logger = AppLogger()
+        engine.load_fishing_stats()
 
         self._build_layout()
         self._set_runtime_state(RunStatus.IDLE, AppStage.IDLE)
         self._refresh_roi_status()
         self._refresh_hotkey_summary()
+        self._refresh_game_key_summary()
         self._register_hotkeys_on_startup()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll_worker_events)
         self.root.after(1000, self._refresh_stats_loop)
         self._notice("프로그램이 준비되었습니다.")
+        self._update_controls_for_state()
         self.logger.info("[BOOT] GUI ready. 메인 윈도우 실행 흐름 준비 완료.")
 
     def run(self) -> None:
@@ -111,16 +113,16 @@ class D4FishingWatcherWindow:
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(5, weight=1)
+        self.root.rowconfigure(2, weight=1)
 
         self._configure_styles()
 
-        header = ttk.Frame(self.root, padding=(22, 16, 22, 8))
+        header = ttk.Frame(self.root, padding=(18, 10, 18, 6))
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
-        if self._header_icon is not None:
-            icon = ttk.Label(header, image=self._header_icon)
-            icon.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
+        if self._icons.header is not None:
+            icon = ttk.Label(header, image=self._icons.header)
+            icon.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
 
         ttk.Label(header, text="D4 Fishing Watcher", style="AppName.TLabel").grid(row=0, column=1, sticky="w")
         ttk.Label(header, text="Diablo IV 낚시 도우미", style="Muted.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
@@ -128,10 +130,9 @@ class D4FishingWatcherWindow:
             header,
             textvariable=self.status_badge_var,
             style="Badge.TLabel",
-            anchor="center",
-            width=16,
+            anchor="e",
         )
-        self.status_badge.grid(row=0, column=2, rowspan=2, sticky="e", padx=(16, 10))
+        self.status_badge.grid(row=0, column=2, rowspan=2, sticky="e", padx=(14, 10))
         self.header_settings_button = ttk.Button(
             header,
             text="설정",
@@ -139,120 +140,100 @@ class D4FishingWatcherWindow:
         )
         self.header_settings_button.grid(row=0, column=3, rowspan=2, sticky="e")
 
-        guide = ttk.Frame(self.root, padding=(22, 0, 22, 8), style="Panel.TFrame")
-        guide.grid(row=1, column=0, sticky="ew", padx=22, pady=(2, 0))
-        guide.columnconfigure(0, weight=1)
-        ttk.Label(guide, textvariable=self.detail_var, style="PanelTitle.TLabel", wraplength=780).grid(
-            row=0,
+        notice = ttk.Frame(self.root, padding=(18, 10), style="Notice.TFrame")
+        notice.grid(row=1, column=0, sticky="ew", padx=18, pady=(6, 8))
+        notice.columnconfigure(0, weight=1)
+        ttk.Label(notice, textvariable=self.headline_var, style="NoticeLead.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(notice, textvariable=self.detail_var, style="NoticeMuted.TLabel", wraplength=760).grid(
+            row=1,
             column=0,
             sticky="ew",
-            padx=16,
-            pady=(14, 12),
+            pady=(3, 0),
         )
 
-        action_frame = ttk.Frame(self.root, padding=(22, 14, 22, 8))
-        action_frame.grid(row=2, column=0, sticky="ew")
-        action_frame.columnconfigure(0, weight=1)
+        body = ttk.Frame(self.root, padding=(18, 0, 18, 10))
+        body.grid(row=2, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1, minsize=320)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(body, padding=(16, 14), style="Panel.TFrame")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        left.columnconfigure(0, weight=1)
+        ttk.Label(left, text="낚시 준비", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(left, text="게임 창 확인, 낚시 위치 설정, 시작 순서로 진행합니다.", style="PanelMuted.TLabel", wraplength=290).grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            pady=(5, 12),
+        )
+
+        readiness = ttk.Frame(left, style="Panel.TFrame")
+        readiness.grid(row=2, column=0, sticky="ew")
+        readiness.columnconfigure(1, weight=1)
+        self._create_status_row(readiness, 0, "게임 창", self.window_status_var)
+        self._create_status_row(readiness, 1, "낚시 위치", self.roi_status_var)
+
         self.primary_button = ttk.Button(
-            action_frame,
+            left,
             textvariable=self.primary_action_var,
             style="Primary.TButton",
             command=self._on_primary_action,
         )
-        self.primary_button.grid(row=0, column=0, sticky="ew")
-        ttk.Label(action_frame, textvariable=self.primary_hint_var, style="Muted.TLabel").grid(
-            row=1,
+        self.primary_button.grid(row=3, column=0, sticky="ew", pady=(18, 0))
+        ttk.Label(left, textvariable=self.primary_hint_var, style="PanelMuted.TLabel").grid(
+            row=4,
             column=0,
             sticky="w",
             pady=(8, 0),
         )
 
-        stats_frame = ttk.Frame(self.root, padding=(22, 4, 22, 8))
-        stats_frame.grid(row=3, column=0, sticky="ew")
-        for column in range(4):
-            stats_frame.columnconfigure(column, weight=1, uniform="stats")
-        self._create_stat_card(stats_frame, 0, self.cast_count_var, "낚시")
-        self._create_stat_card(stats_frame, 1, self.catch_count_var, "성공")
-        self._create_stat_card(stats_frame, 2, self.fail_count_var, "실패")
-        self._create_stat_card(stats_frame, 3, self.run_time_var, "실행 시간")
+        ttk.Separator(left, orient="horizontal").grid(row=5, column=0, sticky="ew", pady=(16, 12))
+        key_summary = ttk.Frame(left, style="Panel.TFrame")
+        key_summary.grid(row=6, column=0, sticky="ew")
+        key_summary.columnconfigure(1, weight=1)
+        self._create_status_row(key_summary, 0, "단축키", self.hotkey_summary_var)
+        self._create_status_row(key_summary, 1, "게임 조작키", self.game_key_summary_var)
 
-        progress_frame = ttk.Frame(self.root, padding=(22, 4, 22, 8))
-        progress_frame.grid(row=4, column=0, sticky="ew")
-        for column in range(5):
-            progress_frame.columnconfigure(column, weight=1, uniform="progress")
-        self._create_status_card(progress_frame, 0, "현재 단계", self.progress_stage_var)
-        self._create_status_card(progress_frame, 1, "게임 연결", self.window_status_var)
-        self._create_status_card(progress_frame, 2, "낚시 위치", self.roi_status_var)
-        self._create_status_card(progress_frame, 3, "감지 상태", self.detection_status_var)
-        self._create_status_card(progress_frame, 4, "최근 결과", self.recent_result_var)
+        right = ttk.Frame(body, padding=(16, 14), style="Panel.TFrame")
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(3, weight=1)
+        ttk.Label(right, text="진행 상황", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
 
-        log_frame = ttk.Frame(self.root, padding=(22, 4, 22, 14), style="Panel.TFrame")
-        log_frame.grid(row=5, column=0, sticky="nsew", padx=22, pady=(0, 14))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(1, weight=1)
-        ttk.Label(log_frame, text="최근 안내", style="PanelTitle.TLabel").grid(
-            row=0,
+        progress = ttk.Frame(right, style="Panel.TFrame")
+        progress.grid(row=1, column=0, sticky="ew", pady=(10, 14))
+        progress.columnconfigure(0, weight=1)
+        ttk.Label(progress, textvariable=self.progress_stage_var, style="PanelLead.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(progress, textvariable=self.detail_var, style="PanelMuted.TLabel", wraplength=390).grid(
+            row=1,
             column=0,
-            sticky="w",
-            padx=14,
-            pady=(12, 6),
+            sticky="ew",
+            pady=(6, 0),
         )
 
-        self.log_text = tk.Text(
-            log_frame,
-            height=8,
-            wrap="word",
-            state=tk.DISABLED,
-            font=("Segoe UI", 10),
-        )
-        configure_text_widget(self.log_text)
-        self.log_text.grid(row=1, column=0, sticky="nsew", padx=(14, 0), pady=(0, 14))
+        quick_status = ttk.Frame(right, style="Panel.TFrame")
+        quick_status.grid(row=2, column=0, sticky="ew")
+        quick_status.columnconfigure(1, weight=1)
+        self._create_status_row(quick_status, 0, "상태", self.detection_status_var)
+        self._create_status_row(quick_status, 1, "최근 결과", self.recent_result_var)
 
-        scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        scrollbar.grid(row=1, column=1, sticky="ns", pady=(0, 14))
-        self.log_text.configure(yscrollcommand=scrollbar.set)
+        spacer = ttk.Frame(right, style="Panel.TFrame")
+        spacer.grid(row=3, column=0, sticky="nsew")
+
+        stats_bar = ttk.Frame(self.root, padding=(18, 9), style="Notice.TFrame")
+        stats_bar.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 14))
+        for column in range(3):
+            stats_bar.columnconfigure(column, weight=1)
+        self._create_stat_pill(stats_bar, 0, self.cast_count_var, "누적 낚시")
+        self._create_stat_pill(stats_bar, 1, self.catch_count_var, "누적 성공")
+        self._create_stat_pill(stats_bar, 2, self.run_time_var, "이번 실행")
 
     def _configure_styles(self) -> None:
         apply_theme(self.root)
 
     def _apply_window_icon(self, window: tk.Misc) -> None:
-        try:
-            if self._app_icon is None:
-                icon_path = get_resource_path("app-icon.png")
-                try:
-                    self._app_icon = tk.PhotoImage(file=str(icon_path))
-                except tk.TclError:
-                    self._app_icon = self._create_fallback_app_icon(get_resource_path("app-icon.svg"))
-                self._header_icon = self._app_icon.subsample(max(1, self._app_icon.width() // 36))
-            window.iconphoto(True, self._app_icon)
-        except tk.TclError:
-            LOGGER.debug("Failed to apply app icon for Tk window", exc_info=True)
-
-    def _create_fallback_app_icon(self, icon_path) -> tk.PhotoImage:
-        icon_path.read_text(encoding="utf-8")
-        image = tk.PhotoImage(width=64, height=64)
-        image.put("#07111f", to=(0, 0, 64, 64))
-        for x in range(64):
-            for y in range(64):
-                dx = x - 32
-                dy = y - 32
-                if dx * dx + dy * dy <= 28 * 28:
-                    image.put("#0d1b2e", (x, y))
-        for x in range(17, 43):
-            for y in range(9, 17):
-                if (x - 30) * (x - 30) + (y - 13) * (y - 13) <= 13 * 13:
-                    image.put("#38bdf8", (x, y))
-        for x in range(29, 35):
-            for y in range(16, 46):
-                image.put("#38bdf8", (x, y))
-        for x in range(18, 34):
-            for y in range(40, 56):
-                dx = x - 25
-                dy = y - 47
-                distance = dx * dx + dy * dy
-                if 54 <= distance <= 100 and x <= 31:
-                    image.put("#38bdf8", (x, y))
-        return image
+        self._icons.apply_to(window)
 
     def _create_info_row(
         self,
@@ -297,6 +278,39 @@ class D4FishingWatcherWindow:
             pady=(6, 0),
         )
 
+    def _create_status_row(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        label_text: str,
+        value_var: tk.StringVar,
+    ) -> None:
+        ttk.Label(parent, text=label_text, style="PanelMuted.TLabel").grid(
+            row=row,
+            column=0,
+            sticky="w",
+            pady=(0 if row == 0 else 9, 0),
+        )
+        ttk.Label(parent, textvariable=value_var, style="PanelValue.TLabel", wraplength=260).grid(
+            row=row,
+            column=1,
+            sticky="ew",
+            padx=(18, 0),
+            pady=(0 if row == 0 else 9, 0),
+        )
+
+    def _create_stat_pill(
+        self,
+        parent: ttk.Frame,
+        column: int,
+        value_var: tk.StringVar,
+        label_text: str,
+    ) -> None:
+        frame = ttk.Frame(parent, style="Panel.TFrame")
+        frame.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+        ttk.Label(frame, textvariable=value_var, style="SmallStatValue.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text=label_text, style="SmallStatLabel.TLabel").grid(row=1, column=0, sticky="w")
+
     def _register_hotkeys_on_startup(self) -> None:
         try:
             self._hotkey_manager.start(self._settings.hotkeys)
@@ -315,8 +329,14 @@ class D4FishingWatcherWindow:
 
     def _refresh_hotkey_summary(self) -> None:
         hotkeys = self._settings.hotkeys
-        self.hotkey_summary_var.set(f"시작: {hotkeys.start_fishing} / 중지: {hotkeys.stop_fishing}")
+        self.hotkey_summary_var.set(f"시작 {hotkeys.start_fishing} · 중지 {hotkeys.stop_fishing}")
         self._update_controls_for_state()
+
+    def _refresh_game_key_summary(self) -> None:
+        game_keys = self._settings.game_keys
+        self.game_key_summary_var.set(
+            f"소셜 {game_keys.social_menu} · 상호작용 {game_keys.interact_pickup} · 회수 {game_keys.reel}"
+        )
 
     def _on_primary_action(self) -> None:
         if self._worker_status in (RunStatus.RUNNING, RunStatus.SELECTING_ROI):
@@ -336,20 +356,18 @@ class D4FishingWatcherWindow:
 
         window = tk.Toplevel(self.root)
         self._hotkey_window = window
+        window.withdraw()
         window.title("설정")
         window.configure(bg=COLORS["bg"])
-        self._apply_window_icon(window)
-        apply_windows_window_polish(window)
-        window.resizable(True, True)
+        window.resizable(False, False)
         window.transient(self.root)
-        window.grab_set()
 
         start_var = tk.StringVar(value=self._settings.hotkeys.start_fishing)
         stop_var = tk.StringVar(value=self._settings.hotkeys.stop_fishing)
         social_var = tk.StringVar(value=self._settings.game_keys.social_menu)
         interact_var = tk.StringVar(value=self._settings.game_keys.interact_pickup)
         reel_var = tk.StringVar(value=self._settings.game_keys.reel)
-        message_var = tk.StringVar(value="변경 버튼을 누른 뒤 사용할 키 하나를 누르세요.")
+        message_var = tk.StringVar(value="변경을 누른 뒤 사용할 키 하나를 입력하세요.")
         capture_target: dict[str, Optional[str]] = {"name": None}
 
         frame = ttk.Frame(window, padding=(18, 16), style="Dialog.TFrame")
@@ -364,17 +382,17 @@ class D4FishingWatcherWindow:
         ttk.Label(header, text="설정", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             header,
-            text="게임 내 지정한 키와 동일하게 맞추면 다음 낚시부터 바로 적용됩니다.",
+            text="게임에서 지정한 키와 동일하게 설정해 주세요.",
             style="DialogMuted.TLabel",
-            wraplength=450,
+            wraplength=420,
         ).grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
-        program_frame = ttk.LabelFrame(frame, text="프로그램 단축키", padding=(14, 12))
+        program_frame = ttk.LabelFrame(frame, text="프로그램 단축키", padding=(12, 10))
         program_frame.grid(row=1, column=0, columnspan=3, sticky="ew")
         program_frame.columnconfigure(1, weight=1)
 
-        game_frame = ttk.LabelFrame(frame, text="Diablo IV 게임 조작키", padding=(14, 12))
-        game_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        game_frame = ttk.LabelFrame(frame, text="Diablo IV 조작키", padding=(12, 10))
+        game_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         game_frame.columnconfigure(1, weight=1)
 
         ttk.Label(program_frame, text="낚시 시작", style="InfoLabel.TLabel").grid(row=0, column=0, sticky="w")
@@ -387,6 +405,7 @@ class D4FishingWatcherWindow:
         ttk.Button(
             program_frame,
             text="변경",
+            width=8,
             command=lambda: begin_capture("start"),
         ).grid(row=0, column=2, sticky="ew")
 
@@ -401,6 +420,7 @@ class D4FishingWatcherWindow:
         ttk.Button(
             program_frame,
             text="변경",
+            width=8,
             command=lambda: begin_capture("stop"),
         ).grid(row=1, column=2, sticky="ew", pady=(10, 0))
 
@@ -408,28 +428,28 @@ class D4FishingWatcherWindow:
         self._create_key_setting_row(game_frame, 1, "상호작용 / 줍기", interact_var, lambda: begin_capture("interact"))
         self._create_key_setting_row(game_frame, 2, "낚싯대 회수", reel_var, lambda: begin_capture("reel"))
 
-        ttk.Label(frame, textvariable=message_var, style="DialogMuted.TLabel", wraplength=430).grid(
+        ttk.Label(frame, textvariable=message_var, style="DialogMuted.TLabel", wraplength=420).grid(
             row=3,
             column=0,
             columnspan=3,
             sticky="ew",
-            pady=(14, 0),
+            pady=(12, 0),
         )
 
         button_frame = ttk.Frame(frame, style="Dialog.TFrame")
-        button_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        button_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(16, 0))
         button_frame.columnconfigure(1, weight=1)
-        ttk.Button(button_frame, text="기본값 복원", command=lambda: restore_defaults()).grid(
+        ttk.Button(button_frame, text="기본값 복원", width=12, command=lambda: restore_defaults()).grid(
             row=0,
             column=0,
             sticky="w",
         )
-        ttk.Button(button_frame, text="취소", command=lambda: close_window()).grid(
+        ttk.Button(button_frame, text="취소", width=8, command=lambda: close_window()).grid(
             row=0,
             column=2,
             sticky="e",
         )
-        ttk.Button(button_frame, text="저장", command=lambda: save_hotkeys()).grid(
+        ttk.Button(button_frame, text="저장", width=8, style="Accent.TButton", command=lambda: save_hotkeys()).grid(
             row=0,
             column=3,
             sticky="e",
@@ -446,7 +466,7 @@ class D4FishingWatcherWindow:
                 "reel": "낚싯대 회수",
             }
             label = labels.get(target, "설정")
-            message_var.set(f"{label} 단축키로 사용할 키를 눌러주세요. ESC는 변경 취소입니다.")
+            message_var.set(f"{label} 키 입력 대기 중입니다. 사용할 키 하나를 누르세요. ESC는 취소입니다.")
             window.focus_force()
 
         def restore_defaults() -> None:
@@ -505,6 +525,7 @@ class D4FishingWatcherWindow:
             self._settings = next_settings
             engine.set_runtime_game_keys(game_keys)
             self._refresh_hotkey_summary()
+            self._refresh_game_key_summary()
             self._notice("조작키 설정이 저장되었습니다.")
             self.logger.info(
                 "[SETTINGS] 저장 완료: "
@@ -544,8 +565,14 @@ class D4FishingWatcherWindow:
 
         window.bind("<KeyPress>", on_key_press)
         window.protocol("WM_DELETE_WINDOW", close_window)
-        self._center_child_window(window, width=540, height=500)
+        window.update_idletasks()
+        self._center_child_window(window, width=520, height=445)
+        self._apply_window_icon(window)
+        window.deiconify()
+        apply_windows_window_polish(window)
+        window.lift()
         window.focus_force()
+        window.grab_set()
 
     def _create_key_setting_row(
         self,
@@ -568,7 +595,7 @@ class D4FishingWatcherWindow:
             padx=(16, 8),
             pady=(10 if row else 0, 0),
         )
-        ttk.Button(parent, text="변경", command=command).grid(
+        ttk.Button(parent, text="변경", width=8, command=command).grid(
             row=row,
             column=2,
             sticky="ew",
@@ -583,6 +610,12 @@ class D4FishingWatcherWindow:
         root_height = max(1, self.root.winfo_height())
         x = root_x + max(0, (root_width - width) // 2)
         y = root_y + max(0, (root_height - height) // 2)
+        work_area = get_window_work_area(self.root)
+        if work_area is None:
+            work_area = (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        work_x, work_y, work_width, work_height = work_area
+        x = min(max(work_x, x), work_x + max(0, work_width - width))
+        y = min(max(work_y, y), work_y + max(0, work_height - height))
         window.geometry(f"{width}x{height}+{x}+{y}")
 
     def _on_start(self) -> None:
@@ -910,11 +943,10 @@ class D4FishingWatcherWindow:
 
     def _refresh_stats(self) -> None:
         snapshot = engine.get_fishing_stats_snapshot()
-        self.cast_count_var.set(f"{snapshot.session_cast_count}회")
-        self.catch_count_var.set(f"{snapshot.session_catch_count}회")
-        self.fail_count_var.set(f"{snapshot.session_fail_count}회")
+        self.cast_count_var.set(f"{snapshot.total_cast_count}회")
+        self.catch_count_var.set(f"{snapshot.total_catch_count}회")
         self.run_time_var.set(self._format_seconds(snapshot.session_run_seconds))
-        self.recent_result_var.set(snapshot.recent_result)
+        self.recent_result_var.set("기록 없음" if snapshot.recent_result == "--" else snapshot.recent_result)
 
     @staticmethod
     def _format_seconds(seconds: int) -> str:
@@ -977,28 +1009,56 @@ class D4FishingWatcherWindow:
         if stage is not None:
             self.stage_var.set(self._format_stage(stage))
             self.progress_stage_var.set(self._format_stage(stage))
+            if status is RunStatus.RUNNING:
+                self.detail_var.set(self._format_stage_detail(stage))
         self.detection_status_var.set(self._format_detection_status(status, stage))
         self._update_controls_for_state()
 
     def _update_controls_for_state(self) -> None:
         status = self._worker_status
         hotkeys = self._settings.hotkeys
+        roi_ready = engine.get_current_fishing_search_roi() is not None
 
         if status is RunStatus.RUNNING:
+            self.headline_var.set(self.progress_stage_var.get())
             self.primary_action_var.set("낚시 중지")
-            self.primary_hint_var.set(f"중지 단축키 {hotkeys.stop_fishing}")
+            self.primary_hint_var.set(f"{hotkeys.stop_fishing}으로도 중지할 수 있습니다.")
             self.primary_button.configure(style="Danger.TButton", state=tk.NORMAL)
         elif status is RunStatus.SELECTING_ROI:
+            self.headline_var.set("낚시 위치를 설정해 주세요")
+            self.detail_var.set("물가의 낚시 아이콘 영역을 드래그해 선택해 주세요.")
             self.primary_action_var.set("위치 설정 취소")
-            self.primary_hint_var.set(f"중지 단축키 {hotkeys.stop_fishing}")
+            self.primary_hint_var.set(f"{hotkeys.stop_fishing} 또는 ESC로 취소할 수 있습니다.")
             self.primary_button.configure(style="Danger.TButton", state=tk.NORMAL)
         elif status in (RunStatus.CHECKING_WINDOW, RunStatus.STOPPING):
+            if status is RunStatus.CHECKING_WINDOW:
+                self.headline_var.set("Diablo IV 창을 확인하는 중입니다")
+                self.detail_var.set("게임 창을 찾으면 낚시 위치 설정으로 이어집니다.")
+            else:
+                self.headline_var.set("낚시를 중지하는 중입니다")
+                self.detail_var.set("현재 동작을 마무리하고 안전하게 멈춥니다.")
             self.primary_action_var.set("처리 중")
             self.primary_hint_var.set("잠시만 기다려 주세요.")
             self.primary_button.configure(style="Primary.TButton", state=tk.DISABLED)
         else:
-            self.primary_action_var.set("낚시 시작")
-            self.primary_hint_var.set(f"시작 단축키 {hotkeys.start_fishing}")
+            if self._detected_window_rect is None:
+                self.headline_var.set("Diablo IV 창을 찾지 못했습니다")
+                self.detail_var.set("게임을 실행한 뒤 다시 확인해 주세요.")
+                self.primary_action_var.set("게임 창 다시 확인")
+                self.primary_hint_var.set("Diablo IV를 실행한 뒤 다시 확인해 주세요.")
+            elif not roi_ready:
+                self.headline_var.set("낚시 위치를 설정해 주세요")
+                self.detail_var.set("물가의 낚시 아이콘 영역을 선택해 주세요.")
+                self.primary_action_var.set("낚시 위치 설정")
+                self.primary_hint_var.set("위치를 선택하면 낚시가 바로 시작됩니다.")
+            else:
+                if status is RunStatus.STOPPED:
+                    self.headline_var.set("낚시를 중지했습니다")
+                else:
+                    self.headline_var.set("낚시 준비가 완료되었습니다")
+                self.detail_var.set(f"버튼을 누르거나 {hotkeys.start_fishing}으로 시작할 수 있습니다.")
+                self.primary_action_var.set("낚시 시작")
+                self.primary_hint_var.set(f"{hotkeys.start_fishing}으로도 시작할 수 있습니다.")
             self.primary_button.configure(style="Primary.TButton", state=tk.NORMAL)
 
         badge_style = "Badge.TLabel"
@@ -1026,100 +1086,125 @@ class D4FishingWatcherWindow:
     @staticmethod
     def _format_stage(stage: Optional[AppStage]) -> str:
         labels = {
-            AppStage.IDLE: "준비",
-            AppStage.WINDOW_DETECTION: "게임 창 확인",
-            AppStage.ROI_SELECTION: "낚시 위치 설정",
-            AppStage.READY_TO_RUN: "준비",
-            AppStage.FIND_WINDOW: "게임 창 확인",
-            AppStage.CAST: "캐스팅",
-            AppStage.FIND_BOBBER: "아이콘 확인 중",
-            AppStage.WAIT_READY: "입질 대기",
-            AppStage.REEL: "회수",
-            AppStage.LOOT: "아이템 줍기",
-            AppStage.RECAST: "다음 낚시 준비",
+            AppStage.IDLE: "게임 창 확인 대기",
+            AppStage.WINDOW_DETECTION: "Diablo IV 창 확인 중",
+            AppStage.ROI_SELECTION: "낚시 위치 설정 중",
+            AppStage.READY_TO_RUN: "낚시를 시작하는 중",
+            AppStage.FIND_WINDOW: "Diablo IV 창 확인 중",
+            AppStage.CAST: "낚싯대를 던지는 중",
+            AppStage.FIND_BOBBER: "낚시 아이콘을 확인하는 중",
+            AppStage.WAIT_READY: "입질을 기다리는 중",
+            AppStage.REEL: "낚싯대를 회수하는 중",
+            AppStage.LOOT: "아이템을 줍는 중",
+            AppStage.RECAST: "다음 낚시를 준비하는 중",
             AppStage.STOPPING: "중지 중",
-            AppStage.ERROR: "오류",
+            AppStage.ERROR: "오류가 발생했습니다",
             AppStage.RUNNING: "진행 중",
         }
         return labels.get(stage, "--")
 
+    @staticmethod
+    def _format_stage_detail(stage: Optional[AppStage]) -> str:
+        labels = {
+            AppStage.READY_TO_RUN: "낚시 엔진을 준비하고 있습니다.",
+            AppStage.FIND_WINDOW: "Diablo IV 창 상태를 확인하고 있습니다.",
+            AppStage.CAST: "낚시 시작 아이콘을 확인하고 낚싯대를 던집니다.",
+            AppStage.FIND_BOBBER: "선택한 영역에서 낚시 상태를 확인하고 있습니다.",
+            AppStage.WAIT_READY: "입질 신호를 기다리고 있습니다.",
+            AppStage.REEL: "입질 후 낚싯대를 회수합니다.",
+            AppStage.LOOT: "획득한 아이템을 줍습니다.",
+            AppStage.RECAST: "같은 위치에서 다음 낚시를 준비합니다.",
+            AppStage.RUNNING: "낚시 루프가 진행 중입니다.",
+        }
+        return labels.get(stage, "낚시가 진행 중입니다.")
+
     def _format_status_badge(self, status: RunStatus, stage: Optional[AppStage]) -> str:
         if status is RunStatus.IDLE and self._detected_window_rect is None:
-            return "게임 창 확인 필요"
+            return "● 확인 필요"
+        if status in (RunStatus.IDLE, RunStatus.STOPPED) and engine.get_current_fishing_search_roi() is None:
+            return "● 위치 필요"
+        if status in (RunStatus.IDLE, RunStatus.STOPPED):
+            return "● 준비 완료"
         if status is RunStatus.SELECTING_ROI:
-            return "낚시 위치 설정 필요"
+            return "● 위치 설정"
         if status is RunStatus.RUNNING:
-            return "낚시 중"
+            return "● 낚시 중"
         if status is RunStatus.STOPPING:
-            return "중지 중"
+            return "● 중지 중"
         if status is RunStatus.STOPPED:
-            return "중지됨"
+            return "● 중지됨"
         if status is RunStatus.ERROR:
-            return "오류 발생"
+            return "● 오류 발생"
         if stage is AppStage.ROI_SELECTION:
-            return "낚시 위치 설정 필요"
-        return "준비됨"
+            return "● 위치 설정"
+        return "● 대기"
 
     @staticmethod
     def _format_detection_status(status: RunStatus, stage: Optional[AppStage]) -> str:
         if status is RunStatus.CHECKING_WINDOW:
             return "게임 창 확인 중"
+        if status is RunStatus.SELECTING_ROI:
+            return "낚시 위치 설정 중"
+        if status is RunStatus.RUNNING and stage in (AppStage.READY_TO_RUN, AppStage.RUNNING, None):
+            return "낚시 진행 중"
         if stage in (AppStage.FIND_BOBBER, AppStage.WAIT_READY):
             return "입질 대기 중"
         if stage is AppStage.REEL:
             return "회수 중"
         if stage is AppStage.CAST:
             return "아이콘 확인 중"
-        return "준비됨"
+        if status is RunStatus.ERROR:
+            return "확인 필요"
+        if status is RunStatus.STOPPED:
+            return "중지됨"
+        return "대기"
 
     def _set_window_status(self, status: WindowStatus, detail: str) -> None:
-        self.window_status_var.set("연결됨" if status is WindowStatus.FOUND else "찾을 수 없음")
+        self.window_status_var.set(
+            "Diablo IV 창을 찾았습니다" if status is WindowStatus.FOUND else "Diablo IV 창을 찾지 못했습니다"
+        )
         self.window_detail_var.set(detail)
 
     def _refresh_roi_status(self, override: Optional[str] = None) -> None:
         if override is not None:
             self.roi_status_var.set(self._format_roi_status_text(override))
+            self._update_controls_for_state()
             return
 
         roi = engine.get_current_fishing_search_roi()
         if roi is None:
-            self.roi_status_var.set("설정 필요")
+            if self._detected_window_rect is None:
+                self.roi_status_var.set("게임 창을 먼저 확인해 주세요")
+            else:
+                self.roi_status_var.set("낚시 위치를 설정해 주세요")
+            self._update_controls_for_state()
             return
-        self.roi_status_var.set("설정됨")
+        self.roi_status_var.set("낚시 위치가 설정되었습니다")
+        self._update_controls_for_state()
 
     @staticmethod
     def _format_roi_status_text(value: str) -> str:
         if "완료" in value:
-            return "설정됨"
+            return "낚시 위치가 설정되었습니다"
         if "취소" in value:
-            return "설정 필요"
+            return "낚시 위치를 설정해 주세요"
         if "잘못" in value:
-            return "다시 설정 필요"
+            return "낚시 위치를 다시 설정해 주세요"
         if "안 됨" in value:
-            return "설정 필요"
+            return "낚시 위치를 설정해 주세요"
         return value
 
     def _notice(self, message: str) -> None:
         user_message = self._to_user_message(message)
         if not user_message:
             return
+        if self._notice_lines and self._notice_lines[-1] == user_message:
+            return
         self.last_message_var.set(user_message)
         self.detail_var.set(user_message)
-        timestamp = datetime.now().strftime("%H:%M")
-        line = f"{timestamp}  {user_message}"
-        self._notice_lines.append(line)
+        self._notice_lines.append(user_message)
         if len(self._notice_lines) > self._max_notice_lines:
             self._notice_lines = self._notice_lines[-self._max_notice_lines :]
-        self._append_log(line)
-
-    def _append_log(self, line: str) -> None:
-        self.log_text.configure(state=tk.NORMAL)
-        self.log_text.insert(tk.END, line + "\n")
-        line_count = int(self.log_text.index("end-1c").split(".")[0])
-        if line_count > self._max_notice_lines:
-            self.log_text.delete("1.0", f"{line_count - self._max_notice_lines + 1}.0")
-        self.log_text.configure(state=tk.DISABLED)
-        self.log_text.see(tk.END)
 
     def _to_user_message(self, message: str) -> str:
         replacements = [
