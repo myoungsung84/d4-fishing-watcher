@@ -27,4 +27,6 @@ class AppStage(str, Enum):
     REEL = "낚아올림"
     LOOT = "줍기"
     RECAST = "재시전"
+    STOPPING = "중지 중"
+    ERROR = "오류"
     RUNNING = "실행 중"

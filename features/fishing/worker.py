@@ -5,6 +5,7 @@ import time
 from typing import Callable, Optional
 
 from app.state import AppStage, RunStatus
+from features.fishing.workflow import FishingEngine
 
 LogCallback = Callable[[str], None]
 StateCallback = Callable[[RunStatus], None]
@@ -76,6 +77,26 @@ class FishingWorker:
         self._step(AppStage.IDLE)
         self._state(RunStatus.STOPPED)
         self._log("[WORKER] 중지 완료")
+
+    def _run_engine(self) -> None:
+        engine = FishingEngine(
+            on_log=self._log,
+            on_state=self._state,
+            on_step=self._step,
+            stop_event=self._stop_event,
+            should_stop=self._stop_event.is_set,
+        )
+        try:
+            engine.run()
+        except Exception as exc:
+            self._state(RunStatus.ERROR)
+            self._step(AppStage.ERROR)
+            self._log(f"[WORKER] engine 오류: {exc}")
+            return
+
+        if self._stop_event.is_set():
+            self._state(RunStatus.STOPPED)
+            self._step(AppStage.IDLE)
 
     def _log(self, message: str) -> None:
         if self._on_log is not None:
