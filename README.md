@@ -65,15 +65,16 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 ## 폴더 구조
 
 - `app/`: GUI 앱 진입점, 상태 enum, 경로 helper, 공용 logger
+- `app/config.py`: 런타임 설정값. root `config.py`는 호환 wrapper입니다.
 - `ui/`: Tkinter 메인 윈도우
-- `core/`: 좌표 helper 재노출 및 향후 공용 로직 위치
+- `ui/overlay.py`: 기존 Tkinter overlay와 ROI 선택 UI
+- `core/`: Diablo IV 창 탐지, 화면 캡처, 좌표 helper
 - `features/`: 향후 낚시 실행 엔진 분리 위치
-- `main.py`: 낚시 루프, hotkey, ROI 세션 상태, tracking/reacquire/timeout 흐름
-- `config.py`: 런타임 설정값
-- `detector.py`: template fallback 및 Ready HSV 색상 blob 감지
-- `screen.py`: 화면 캡처와 Diablo IV 창 정보
-- `actions.py`: 키/마우스 입력 helper
-- `stats_overlay.py`: Tkinter overlay와 ROI 선택 UI thread/queue
+- `features/fishing/engine.py`: legacy 콘솔 낚시 루프, hotkey, ROI 세션 상태, tracking/reacquire/timeout 흐름
+- `features/fishing/detector.py`: template fallback 및 Ready HSV 색상 blob 감지
+- `features/fishing/actions.py`: 키/마우스 입력 helper
+- `main.py`: legacy 콘솔 실행 호환 entrypoint
+- `config.py`, `detector.py`, `screen.py`, `actions.py`, `stats_overlay.py`: 기존 import 호환 wrapper
 - `templates/`: start/ready template fallback 이미지
 - `data/`: 런타임 데이터 폴더. 개인 통계 DB는 Git에서 제외됩니다.
 

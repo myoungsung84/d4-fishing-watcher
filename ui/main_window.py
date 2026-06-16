@@ -123,7 +123,7 @@ class D4FishingWatcherWindow:
 
     def _detect_window_worker(self) -> None:
         try:
-            from screen import find_diablo_window_rect
+            from core.screen import find_diablo_window_rect
 
             rect = find_diablo_window_rect()
         except Exception as exc:
