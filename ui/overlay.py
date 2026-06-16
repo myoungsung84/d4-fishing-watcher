@@ -558,8 +558,17 @@ class OverlayController:
             )
             self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 2.0) -> None:
+        if not self._started:
+            return
         self._queue.put(OverlayCommand("shutdown"))
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        if thread is not None and not thread.is_alive():
+            self._thread = None
+            self._started = False
+            self._visible = False
 
     def update_snapshot(self, snapshot: OverlaySnapshot) -> None:
         if not self._started:
@@ -623,5 +632,10 @@ class OverlayController:
             root.after(200, poll_queue)
 
         poll_queue()
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            with self._started_lock:
+                self._started = False
+                self._visible = False
 

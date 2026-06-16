@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import threading
-import time
 from typing import Callable, Optional
 
 from app.state import AppStage, RunStatus
-from features.fishing.workflow import FishingEngine
+from features.fishing import engine
 
 LogCallback = Callable[[str], None]
 StateCallback = Callable[[RunStatus], None]
@@ -15,10 +14,8 @@ StepCallback = Callable[[AppStage], None]
 class FishingWorker:
     """Run the fishing workflow outside the tkinter UI thread.
 
-    The current implementation intentionally does not call main.run(). That function
-    still owns console hotkeys, overlay lifetime, and an infinite wait/start loop.
-    This worker establishes the UI-safe lifecycle first, so the fishing cycle can be
-    moved behind this boundary without changing detection or coordinate contracts.
+    The worker owns only lifecycle coordination: start the engine runtime, create
+    one session, repeat fishing cycles, forward status, and guarantee cleanup.
     """
 
     def __init__(
@@ -43,7 +40,7 @@ class FishingWorker:
 
             self._stop_event.clear()
             self._thread = threading.Thread(
-                target=self._run_placeholder,
+                target=self._run_engine,
                 name="FishingWorker",
                 daemon=True,
             )
@@ -52,6 +49,7 @@ class FishingWorker:
 
     def stop(self) -> None:
         self._stop_event.set()
+        engine.request_fishing_stop(clear_roi=False)
         self._state(RunStatus.STOPPING)
         self._log("[WORKER] 중지 요청을 받았습니다.")
 
@@ -59,44 +57,86 @@ class FishingWorker:
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
-    def _run_placeholder(self) -> None:
+    def join(self, timeout: Optional[float] = None) -> None:
+        with self._lock:
+            thread = self._thread
+
+        if thread is not None:
+            thread.join(timeout=timeout)
+
+    def _run_engine(self) -> None:
+        runtime_started = False
+        had_error = False
+
         self._state(RunStatus.RUNNING)
         self._step(AppStage.READY_TO_RUN)
         self._log("[WORKER] 낚시 worker thread 시작")
-        self._log("[WORKER] 실제 자동 낚시 루프 연결은 다음 단계에서 수행합니다.")
 
         try:
-            while not self._stop_event.wait(0.2):
-                pass
-        except Exception as exc:
-            self._state(RunStatus.ERROR)
-            self._step(AppStage.IDLE)
-            self._log(f"[WORKER] 오류: {exc}")
-            return
+            runtime_started = True
+            engine.start_fishing_runtime(
+                enable_overlay=False,
+                wait_for_start_hotkey=False,
+            )
+            session = engine.create_fishing_session()
+            self._log("[WORKER] engine session 준비 완료")
 
-        self._step(AppStage.IDLE)
-        self._state(RunStatus.STOPPED)
-        self._log("[WORKER] 중지 완료")
+            while not self._is_stop_requested():
+                if not engine.is_fishing_running():
+                    self._step(AppStage.READY_TO_RUN)
+                    if self._stop_event.wait(0.2):
+                        break
+                    continue
 
-    def _run_engine(self) -> None:
-        engine = FishingEngine(
-            on_log=self._log,
-            on_state=self._state,
-            on_step=self._step,
-            stop_event=self._stop_event,
-            should_stop=self._stop_event.is_set,
-        )
-        try:
-            engine.run()
+                if engine.get_current_fishing_search_roi() is None:
+                    self._log("[WORKER] 탐색 영역이 없어 실행을 중단합니다.")
+                    engine.request_fishing_stop(clear_roi=False)
+                    break
+
+                engine.clear_ready_debug_snapshot()
+                engine.refresh_diablo_window_rect(log_missing=True)
+                session.default_ready_roi_local = engine.get_default_ready_roi_local()
+
+                result = engine.run_fishing_cycle(session)
+
+                if result is engine.FishingCycleResult.CANCELLED:
+                    self._step(AppStage.STOPPING)
+                    break
+
+                if result is engine.FishingCycleResult.TIMEOUT:
+                    self._step(AppStage.RECAST)
+                    engine.handle_fishing_cycle_timeout()
+                    continue
+
+                if result is engine.FishingCycleResult.RETRY:
+                    self._step(AppStage.READY_TO_RUN)
+                    continue
+
+                if result is engine.FishingCycleResult.FAILED:
+                    self._log("[WORKER] cycle 실패, 기존 정책에 따라 다음 cycle을 대기합니다.")
+                    self._step(AppStage.READY_TO_RUN)
+                    continue
+
+                if result is engine.FishingCycleResult.SUCCESS:
+                    self._step(AppStage.RUNNING)
+                    continue
         except Exception as exc:
+            had_error = True
             self._state(RunStatus.ERROR)
             self._step(AppStage.ERROR)
-            self._log(f"[WORKER] engine 오류: {exc}")
+            self._log(f"[WORKER] 오류: {exc}")
             return
+        finally:
+            if runtime_started:
+                engine.shutdown_fishing_runtime(clear_roi=False)
 
-        if self._stop_event.is_set():
-            self._state(RunStatus.STOPPED)
-            self._step(AppStage.IDLE)
+            if not had_error:
+                self._state(RunStatus.STOPPED)
+                self._step(AppStage.IDLE)
+                self._log("[WORKER] 중지 완료")
+
+    def _is_stop_requested(self) -> bool:
+        return self._stop_event.is_set()
 
     def _log(self, message: str) -> None:
         if self._on_log is not None:
