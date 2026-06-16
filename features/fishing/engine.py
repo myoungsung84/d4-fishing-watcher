@@ -36,6 +36,8 @@ from core.screen import (
     capture_screen,
     clamp_roi_to_window,
     find_diablo_window_rect,
+    get_active_window_title,
+    is_target_window_active,
     local_to_screen_point,
     screen_roi_to_local_roi,
 )
