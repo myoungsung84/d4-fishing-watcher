@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from features.fishing import engine
-
 
 def main() -> None:
+    from features.fishing import engine
+
     try:
         engine.run()
     except KeyboardInterrupt:

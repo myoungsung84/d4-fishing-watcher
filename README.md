@@ -128,3 +128,9 @@ Git에서 제외하는 항목:
 - 빌드 산출물과 로컬 환경 파일
 
 `data/fishing_stats.db`는 개인 실행 통계 파일이므로 저장소에는 올리지 않습니다. 파일이 없어도 실행 시 자동 생성됩니다.
+
+## 개발 규칙
+
+이 프로젝트는 root에 Python 실행 파일을 두지 않고, Python 코드는 `app/`, `core/`, `features/`, `ui/` 패키지 내부에서 관리합니다.
+
+세부 구조, import, 타입 힌트, Pylance 경고 처리, 검증 규칙은 [CODING_RULES.md](./CODING_RULES.md)를 따릅니다.

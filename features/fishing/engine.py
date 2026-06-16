@@ -13,17 +13,16 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
-from app import config
-from app.lazy_imports import lazy_import
+import cv2
+import numpy as np
 
-cv2 = lazy_import("cv2")
-np = lazy_import("numpy")
-keyboard = lazy_import("pynput.keyboard")
+from app import config
 
 from features.fishing.actions import click_point, move_point, press_key
 from features.fishing.detector import (
     DetectionResult,
     ReadyColorBlob,
+    TemplateImage,
     detect_ready_color_blobs,
     find_best_match,
     find_best_match_multi_scale,
@@ -44,6 +43,12 @@ from core.screen import (
 from ui.overlay import OverlayController, OverlaySnapshot
 
 USER_LOG_MAX_LINES = 14
+
+
+def _get_keyboard_module():
+    from pynput import keyboard
+
+    return keyboard
 
 
 class LogColor:
@@ -718,7 +723,7 @@ class ReadyDetectionResult:
     ignored: bool
     roi_top_left: tuple[int, int] | None
     screen_center: tuple[int, int] | None
-    screen_bgr: object
+    screen_bgr: np.ndarray
     scale: float = 1.0
     roi_type: str = "unknown"
 
@@ -816,7 +821,9 @@ def get_ready_quick_confirm_failure_reason(
     if second.ignored:
         return "ignored"
 
-    if first.screen_center is None or second.screen_center is None:
+    first_center = first.screen_center
+    second_center = second.screen_center
+    if first_center is None or second_center is None:
         return "no_screen_center"
 
     if first.roi_type not in config.CONFIG.ready_single_confirm_rois:
@@ -829,16 +836,17 @@ def get_ready_quick_confirm_failure_reason(
         return f"score score={second.score:.3f}"
 
     if not is_ready_distance_acceptable(
-        first.screen_center,
-        second.screen_center,
+        first_center,
+        second_center,
         config.CONFIG.ready_quick_confirm_max_distance,
     ):
-        return f"distance first={first.screen_center} second={second.screen_center}"
+        return f"distance first={first_center} second={second_center}"
 
     return None
 
 
 def normalize_key(key) -> Optional[str]:
+    keyboard = _get_keyboard_module()
     if key == keyboard.Key.page_up:
         return "page_up"
     if key == keyboard.Key.page_down:
@@ -874,6 +882,7 @@ def on_key_press(key) -> None:
 
 
 def start_hotkey_listener():
+    keyboard = _get_keyboard_module()
     listener = keyboard.Listener(on_press=on_key_press)
     listener.daemon = True
     listener.start()
@@ -960,7 +969,13 @@ def get_detection_roi_top_left(
     )
 
 
-def save_ready_debug_crop(screen_bgr, roi_top_left, template, score: float, prefix: str = "ready_match") -> None:
+def save_ready_debug_crop(
+    screen_bgr: np.ndarray,
+    roi_top_left: tuple[int, int] | None,
+    template: TemplateImage,
+    score: float,
+    prefix: str = "ready_match",
+) -> None:
     if not config.CONFIG.debug_save_ready_match:
         return
     if roi_top_left is None:
@@ -985,7 +1000,7 @@ def save_ready_debug_crop(screen_bgr, roi_top_left, template, score: float, pref
     log_dim(f"[debug] ready match crop saved: {filename}")
 
 
-def save_ready_roi_debug_image(screen_bgr, score: float) -> None:
+def save_ready_roi_debug_image(screen_bgr: np.ndarray, score: float) -> None:
     if not config.CONFIG.debug_save_ready_roi:
         return
 
@@ -999,7 +1014,11 @@ def save_ready_roi_debug_image(screen_bgr, score: float) -> None:
     log_dim(f"[debug] ready ROI image saved: {filename}")
 
 
-def detect_ready_icon(template, threshold: float, roi) -> ReadyDetectionResult:
+def detect_ready_icon(
+    template: TemplateImage,
+    threshold: float,
+    roi: tuple[int, int, int, int] | None,
+) -> ReadyDetectionResult:
     screen_bgr, capture_region = capture_screen(roi)
     result = find_best_match(screen_bgr, capture_region, template, 0.0)
 
@@ -1059,7 +1078,11 @@ def convert_detection_result_to_ready(
     )
 
 
-def detect_ready_icon_multi_scale(template, threshold: float, roi) -> ReadyDetectionResult:
+def detect_ready_icon_multi_scale(
+    template: TemplateImage,
+    threshold: float,
+    roi: tuple[int, int, int, int] | None,
+) -> ReadyDetectionResult:
     screen_bgr, capture_region = capture_screen(roi)
     result, scale = find_best_match_multi_scale(
         screen_bgr,
@@ -1249,7 +1272,7 @@ def _build_start_search_rois() -> List[tuple[str, Optional[tuple[int, int, int, 
     return _dedupe_rois(rois)
 
 
-def detect_start_icon(template) -> DetectionResult:
+def detect_start_icon(template: TemplateImage) -> DetectionResult:
     log_info("[CAST] start icon search")
 
     best_result: Optional[DetectionResult] = None
@@ -1316,10 +1339,10 @@ def _save_ready_miss_crop(frame_bgr: np.ndarray, roi: tuple[int, int, int, int],
 
 
 def detect_ready_icon_adaptive(
-    template,
+    template: TemplateImage,
     threshold: float,
-    default_ready_roi,
-    active_bobber_roi,
+    default_ready_roi: tuple[int, int, int, int] | None,
+    active_bobber_roi: tuple[int, int, int, int] | None,
     base_x: int,
     base_y: int,
     elapsed_text: Optional[str] = None,
@@ -1776,15 +1799,16 @@ def reacquire_or_fallback_bobber(
 ) -> Optional[np.ndarray]:
     bounds = get_local_window_bounds()
     search_roi: tuple[int, int, int, int]
+    active_bobber_roi = tracking.active_bobber_roi
 
-    if tracking.active_bobber_roi is not None:
+    if active_bobber_roi is not None:
         set_bobber_search_status(
             tracking,
             "reacquire",
             "[bobber] tracking lost, reacquire",
         )
         search_roi = expand_roi(
-            tracking.active_bobber_roi,
+            active_bobber_roi,
             config.CONFIG.bobber_reacquire_padding,
             bounds,
         )
@@ -1794,10 +1818,11 @@ def reacquire_or_fallback_bobber(
             "wide search",
             "[bobber] wide search start",
         )
-        search_roi = build_bobber_wide_search_roi()
-        if search_roi is None:
+        wide_search_roi = build_bobber_wide_search_roi()
+        if wide_search_roi is None:
             log_warn("[fishing] search ROI is not selected. Press PageUp and drag fishing area first.")
             return None
+        search_roi = wide_search_roi
 
     selected, candidates, frame_bgr = search_bobber_in_roi(search_roi, tracking.active_bobber_center)
     tracking.top_candidates = candidates
@@ -1824,7 +1849,11 @@ def reacquire_or_fallback_bobber(
     return frame_bgr
 
 
-def loot_items(template, threshold: float, roi) -> bool:
+def loot_items(
+    template: TemplateImage,
+    threshold: float,
+    roi: tuple[int, int, int, int] | None,
+) -> bool:
     if should_stop():
         log_warn("[STOP] 현재 사이클 종료")
         return False
@@ -1873,23 +1902,29 @@ def loot_items(template, threshold: float, roi) -> bool:
     return False
 
 
-def is_point_in_region(point, region) -> bool:
+def is_point_in_region(
+    point: tuple[int, int],
+    region: tuple[int, int, int, int],
+) -> bool:
     x, y = point
     left, top, width, height = region
     return left <= x <= left + width and top <= y <= top + height
 
 
-def point_in_roi(point, roi) -> bool:
+def point_in_roi(
+    point: tuple[int, int],
+    roi: tuple[int, int, int, int],
+) -> bool:
     return is_point_in_region(point, roi)
 
 
 def get_ready_candidate_crop(
     screen_bgr: np.ndarray,
     roi_top_left: Optional[tuple[int, int]],
-    template,
+    template: TemplateImage,
     scale: float,
 ) -> Optional[np.ndarray]:
-    if roi_top_left is None or screen_bgr is None:
+    if roi_top_left is None:
         return None
 
     x, y = roi_top_left
@@ -1940,8 +1975,8 @@ def is_green_bar_like_region(crop: Optional[np.ndarray]) -> bool:
 def get_ready_candidate_skip_reason(
     screen_center: tuple[int, int],
     roi_type: str,
-    candidate_roi,
-    character_full_roi,
+    candidate_roi: tuple[int, int, int, int],
+    character_full_roi: tuple[int, int, int, int] | None,
     character_center: Optional[tuple[int, int]] = None,
 ) -> Optional[str]:
     if screen_center[1] < config.CONFIG.ready_min_screen_y:
@@ -1981,7 +2016,7 @@ def log_ready_candidate_skipped(
         )
 
 
-def is_ready_ignored(screen_center) -> bool:
+def is_ready_ignored(screen_center: tuple[int, int] | None) -> bool:
     if screen_center is None:
         return False
     width, height = get_local_window_size()
@@ -2089,7 +2124,12 @@ def wait_target_window() -> bool:
         time.sleep(0.2)
 
 
-def wait_ready_icon(template, threshold: float, default_ready_roi, active_bobber_roi):
+def wait_ready_icon(
+    template: TemplateImage,
+    threshold: float,
+    default_ready_roi: tuple[int, int, int, int] | None,
+    active_bobber_roi: tuple[int, int, int, int] | None,
+) -> ReadyWaitResult:
     wait_started_at = time.monotonic()
     bobber_tracking = reset_bobber_tracking_state()
     if active_bobber_roi is not None:
@@ -2168,11 +2208,12 @@ def wait_ready_icon(template, threshold: float, default_ready_roi, active_bobber
                 ready_base_y,
             )
 
-        if bobber_tracking.active_bobber_roi is not None:
+        active_bobber_roi = bobber_tracking.active_bobber_roi
+        if active_bobber_roi is not None:
             if config.CONFIG.ready_multi_scale_enabled:
-                result = detect_ready_icon_multi_scale(template, threshold, bobber_tracking.active_bobber_roi)
+                result = detect_ready_icon_multi_scale(template, threshold, active_bobber_roi)
             else:
-                result = detect_ready_icon(template, threshold, bobber_tracking.active_bobber_roi)
+                result = detect_ready_icon(template, threshold, active_bobber_roi)
             result = ReadyDetectionResult(
                 found=result.found,
                 score=result.score,
@@ -2187,7 +2228,7 @@ def wait_ready_icon(template, threshold: float, default_ready_roi, active_bobber
             tracking_frame = result.screen_bgr
 
             selected, candidates, _ = search_bobber_in_roi(
-                bobber_tracking.active_bobber_roi,
+                active_bobber_roi,
                 bobber_tracking.active_bobber_center,
             )
             bobber_tracking.top_candidates = candidates
@@ -2290,13 +2331,16 @@ def wait_ready_icon(template, threshold: float, default_ready_roi, active_bobber
         if result.found:
             screen_center = result.screen_center
             bobber_tracking.search_status = "bite detected"
-            if screen_center is not None:
-                selected_candidate = BobberCandidate(center=screen_center, area=0, score=result.score)
-                update_bobber_tracking_from_candidate(
-                    bobber_tracking,
-                    selected_candidate,
-                    status="bite detected",
-                )
+            if screen_center is None:
+                log_dim("[READY] candidate skipped reason=no_screen_center")
+                continue
+
+            selected_candidate = BobberCandidate(center=screen_center, area=0, score=result.score)
+            update_bobber_tracking_from_candidate(
+                bobber_tracking,
+                selected_candidate,
+                status="bite detected",
+            )
             update_bobber_debug_overlay(
                 bobber_tracking,
                 threshold=threshold,
@@ -2597,7 +2641,7 @@ def run() -> None:
         last_start_icon_pos = icon_center_local
         increment_cast_count()
         add_user_log("낚싯줄 던짐", "cast")
-        active_bobber_roi = None
+        active_bobber_roi: tuple[int, int, int, int] | None = None
 
         log_dim(
             f"[WAIT] START 클릭 후 줍기 전 대기 {config.CONFIG.after_start_click_before_loot_delay_seconds:.1f}초"
@@ -2609,10 +2653,13 @@ def run() -> None:
 
         log_info("[LOOT] START 클릭 후 아이템 줍기")
         add_user_log("떨어진 아이템 확인 중", "loot")
+        loot_ready_roi: tuple[int, int, int, int] | None = (
+            active_bobber_roi if config.CONFIG.ready_use_bobber_roi else default_ready_roi_local
+        )
         ready_found_during_loot = loot_items(
             ready_template,
             config.CONFIG.ready_threshold,
-            active_bobber_roi if config.CONFIG.ready_use_bobber_roi else default_ready_roi_local,
+            loot_ready_roi,
         )
 
         if should_stop():

@@ -4,12 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from app import config
-from app.lazy_imports import lazy_import
-from core.screen import CaptureRegion
+import cv2
+import numpy as np
 
-cv2 = lazy_import("cv2")
-np = lazy_import("numpy")
+from app import config
+from core.screen import CaptureRegion
 
 
 @dataclass(frozen=True)

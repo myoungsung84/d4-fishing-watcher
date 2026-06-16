@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import numpy as np
+
 Roi = Optional[Tuple[int, int, int, int]]
 DIABLO_WINDOW_TITLE_KEYWORDS = ("Diablo IV", "디아블로 IV")
 
@@ -33,9 +35,8 @@ def _get_win32gui():
 
 def _get_capture_modules():
     import mss
-    import numpy as np
 
-    return mss, np
+    return mss
 
 
 def _window_rect_from_handle(handle: int) -> Optional[WindowRect]:
@@ -179,8 +180,8 @@ def clamp_roi(
 def capture_window(
     rect: WindowRect,
     roi: Roi = None,
-):
-    mss, np = _get_capture_modules()
+) -> tuple[np.ndarray, CaptureRegion]:
+    mss = _get_capture_modules()
     if roi is None:
         local_roi = (0, 0, rect.width, rect.height)
     else:
@@ -196,7 +197,7 @@ def capture_window(
 
     with mss.mss() as sct:
         grabbed = sct.grab(region)
-        frame = np.array(grabbed)[:, :, :3]
+        frame: np.ndarray = np.array(grabbed)[:, :, :3]
         capture_region = CaptureRegion(
             left=int(local_roi[0]),
             top=int(local_roi[1]),
@@ -206,15 +207,15 @@ def capture_window(
         return frame, capture_region
 
 
-def capture_diablo_window(roi: Roi = None):
+def capture_diablo_window(roi: Roi = None) -> tuple[np.ndarray, CaptureRegion]:
     rect = get_diablo_window_rect()
     if rect is None:
         return capture_screen_fallback(roi)
     return capture_window(rect, roi)
 
 
-def capture_screen_fallback(roi: Roi = None):
-    mss, np = _get_capture_modules()
+def capture_screen_fallback(roi: Roi = None) -> tuple[np.ndarray, CaptureRegion]:
+    mss = _get_capture_modules()
     with mss.mss() as sct:
         monitor = sct.monitors[0]
         if roi is None:
@@ -233,7 +234,7 @@ def capture_screen_fallback(roi: Roi = None):
             }
 
         grabbed = sct.grab(region)
-        frame = np.array(grabbed)[:, :, :3]
+        frame: np.ndarray = np.array(grabbed)[:, :, :3]
         capture_region = CaptureRegion(
             left=region["left"],
             top=region["top"],
@@ -243,7 +244,7 @@ def capture_screen_fallback(roi: Roi = None):
         return frame, capture_region
 
 
-def capture_screen(roi: Roi = None):
+def capture_screen(roi: Roi = None) -> tuple[np.ndarray, CaptureRegion]:
     """Capture Diablo IV as a local-coordinate frame, with full-screen fallback."""
     rect = get_diablo_window_rect()
     if rect is None:

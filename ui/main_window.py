@@ -8,6 +8,7 @@ from typing import Callable
 
 from app.logger import AppLogger
 from app.state import AppStage, RunStatus, WindowStatus
+from core.screen import WindowRect
 from features.fishing.worker import FishingWorker
 
 WorkerEvent = tuple[str, object]
@@ -132,7 +133,7 @@ class D4FishingWatcherWindow:
 
         self._ui_call(lambda: self._handle_detect_result(rect))
 
-    def _handle_detect_result(self, rect: object) -> None:
+    def _handle_detect_result(self, rect: WindowRect | None) -> None:
         self.detect_button.configure(state=tk.NORMAL)
         if rect is None:
             self.window_status_var.set(WindowStatus.NOT_FOUND.value)
