@@ -11,6 +11,7 @@ class WindowStatus(str, Enum):
 class RunStatus(str, Enum):
     IDLE = "대기 중"
     CHECKING_WINDOW = "Diablo IV 창 확인 중"
+    SELECTING_ROI = "영역 설정 중"
     RUNNING = "실행 중"
     STOPPING = "중지 중"
     STOPPED = "중지됨"
@@ -20,6 +21,7 @@ class RunStatus(str, Enum):
 class AppStage(str, Enum):
     IDLE = "대기"
     WINDOW_DETECTION = "창 감지"
+    ROI_SELECTION = "영역 설정"
     READY_TO_RUN = "낚시 실행 준비"
     FIND_WINDOW = "창 감지"
     CAST = "캐스팅"

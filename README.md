@@ -1,6 +1,6 @@
 # d4-fishing-watcher
 
-Diablo IV 낚시 자동화 보조 프로그램입니다. 현재 핵심 흐름은 메인 윈도우에서 낚시 영역을 지정한 뒤 시작/중지 버튼으로 낚시 worker를 제어하는 방식입니다.
+Diablo IV 낚시 자동화 보조 프로그램입니다. 현재 핵심 흐름은 메인 윈도우에서 `시작`을 누를 때마다 Diablo IV 창을 확인하고, 감지 영역을 새로 지정한 뒤 낚시 worker를 실행하는 방식입니다.
 
 ## 주의사항
 
@@ -22,15 +22,16 @@ python -m app.main
 ## 기본 사용 흐름
 
 1. `python -m app.main` 또는 `run.bat`로 메인 윈도우를 실행합니다.
-2. `낚시 영역 설정` 버튼으로 현재 낚시터의 탐색 영역을 드래그 지정합니다.
-3. `시작` 버튼을 누르면 Diablo IV 창을 확인한 뒤 worker가 낚시 엔진을 실행합니다.
-4. `중지` 버튼을 누르면 기존 엔진의 중지 플래그를 통해 현재 루프를 안전하게 빠져나옵니다.
+2. `시작` 버튼을 누르면 Diablo IV 창을 확인합니다.
+3. 창을 찾으면 Diablo IV 창 위에 영역 선택 UI가 표시됩니다.
+4. 낚시 감지에 사용할 영역을 드래그해 선택하면 worker가 낚시 엔진을 실행합니다.
+5. `중지` 버튼을 누르면 기존 엔진의 중지 플래그를 통해 현재 루프를 안전하게 빠져나옵니다.
 
-`current_fishing_search_roi`는 파일이나 프로필에 저장하지 않습니다. 지정한 ROI는 현재 실행 세션에서만 유지되며, 프로그램 종료 시 폐기됩니다. 단, 같은 자리에서 30초 timeout 후 pull and recast를 반복할 때는 ROI를 유지합니다.
+`current_fishing_search_roi`는 파일이나 프로필에 저장하지 않습니다. 실행 중에는 선택한 ROI를 유지하지만, 다음 시작 시에는 이전 ROI를 자동 재사용하지 않고 반드시 새로 선택합니다. 단, 같은 실행 안에서 30초 timeout 후 pull and recast를 반복할 때는 ROI를 유지합니다.
 
 ## 현재 감지 흐름
 
-1. 메인 윈도우에서 fishing search ROI를 수동 지정합니다.
+1. 시작 시 Diablo IV 창 위에서 fishing search ROI를 수동 지정합니다.
 2. 캐스팅 후 지정 ROI 안에서 찌 후보를 wide search합니다.
 3. 후보를 찾으면 `active_bobber_roi`로 추적합니다.
 4. 추적 실패 시 주변 확장 reacquire를 수행합니다.
@@ -69,6 +70,18 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 - `features/fishing/actions.py`: 키/마우스 입력 helper
 - `templates/`: start/ready template fallback 이미지
 - `data/`: 런타임 데이터 폴더. 개인 통계 DB는 Git에서 제외됩니다.
+- `logs/`: 날짜별 실행 로그가 생성되는 런타임 폴더
+
+## 로그
+
+메인 윈도우의 실시간 로그에는 사용자에게 필요한 주요 안내만 표시합니다. 개발용 상세 로그와 예외 traceback은 날짜별 파일에 저장합니다.
+
+- 저장 위치: `logs/YYYY-MM-DD.log`
+- 인코딩: UTF-8
+- 로그 레벨: DEBUG 이상
+- 예: `logs/2026-06-16.log`
+
+문제가 발생하면 해당 날짜의 로그 파일을 확인하세요. 앱을 같은 날짜에 다시 실행하면 같은 파일에 이어서 기록합니다.
 
 ## 검증
 
@@ -83,10 +96,14 @@ python -c "import app; import core; import features.fishing; import ui"
 
 - `python -m app.main` 또는 `run.bat` 실행
 - Diablo IV 미실행 상태에서 `시작` 클릭 후 실패 안내와 시작 버튼 재사용 가능 여부 확인
-- Diablo IV 실행 상태에서 `낚시 영역 설정` 후 `시작` 클릭
+- Diablo IV 실행 상태에서 `시작` 클릭 후 영역 선택 UI 표시 확인
+- 영역 선택 취소 후 다시 시작 가능 여부 확인
+- 영역 선택 완료 후 worker 실행 확인
 - worker 실행 중 메인 UI가 멈추지 않는지 확인
 - `중지` 버튼으로 실행 종료 및 버튼/상태 복구 확인
-- 별도 실행 상태 창이 나타나지 않는지 확인
+- 다음 시작 시 감지 영역을 다시 선택하는지 확인
+- `logs/YYYY-MM-DD.log` 생성 및 이어쓰기 확인
+- 별도 실행 상태 창이나 삭제된 실행 경로가 나타나지 않는지 확인
 
 ## 튜닝 포인트
 
@@ -111,6 +128,7 @@ Git에서 제외하는 항목:
 - `__pycache__/`
 - `debug/`, `data/debug/`
 - `data/*.db`
+- `logs/*.log`
 - 빌드 산출물과 로컬 환경 파일
 
 `data/fishing_stats.db`는 개인 실행 통계 파일이므로 저장소에는 올리지 않습니다. 파일이 없어도 실행 시 자동 생성됩니다.

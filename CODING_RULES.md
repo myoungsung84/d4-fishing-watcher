@@ -67,7 +67,7 @@ python -m app.main
 - 낚시 cycle
 - Diablo IV 창/ROI/좌표 처리
 - 클릭 시나리오
-- legacy engine
+- engine runtime
 
 ### ui
 
@@ -302,7 +302,7 @@ LazyModule은 기본적으로 새로 추가하지 않는다.
 - 클릭 순서
 - sleep 값
 - cast/reel/recast 타이밍
-- legacy engine 동작
+- Ready/Bite/Reel/Recast 동작
 - templates 이미지 기준
 - 실제 마우스/키보드 동작 타이밍
 
@@ -324,7 +324,7 @@ MainWindow
 `FishingWorker`는 시작/중지 lifecycle과 상태 전달을 담당한다.  
 실제 낚시 판단과 클릭 시나리오는 `features/fishing` 내부에 둔다.
 
-GUI worker 실제 연결 작업은 별도 단계에서 진행한다.
+GUI worker는 메인 윈도우의 시작/중지 흐름에 연결된 상태를 유지한다.
 
 ## 9. 메인 윈도우 실행 원칙
 
@@ -400,7 +400,7 @@ VS Code Problems 탭 기준으로 별도 확인한다.
 - 낚시 감지 로직 변경 여부:
 - 좌표/ROI 변경 여부:
 - 클릭 타이밍 변경 여부:
-- legacy console 동작 변경 여부:
+- 메인 윈도우 시작/중지 흐름 변경 여부:
 
 5. 검증 결과
 - python -m compileall .:

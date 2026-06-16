@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Callable, Optional
 
@@ -10,10 +11,11 @@ LogCallback = Callable[[str], None]
 StateCallback = Callable[[RunStatus], None]
 StepCallback = Callable[[AppStage], None]
 WindowCallback = Callable[[WindowStatus], None]
+LOGGER = logging.getLogger(__name__)
 
 
 class FishingWorker:
-    """Run the fishing workflow outside the tkinter UI thread.
+    """Run the fishing workflow outside the UI thread.
 
     The worker owns only lifecycle coordination: start the engine runtime, create
     one session, repeat fishing cycles, forward status, and guarantee cleanup.
@@ -145,6 +147,7 @@ class FishingWorker:
                     continue
         except Exception as exc:
             had_error = True
+            LOGGER.exception("Fishing worker failed")
             self._state(RunStatus.ERROR)
             self._step(AppStage.ERROR)
             self._log(f"[WORKER] 오류: {exc}")

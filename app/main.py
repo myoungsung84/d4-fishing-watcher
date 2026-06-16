@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import logging
 
+from app.logger import configure_logging
 from ui.main_window import D4FishingWatcherWindow
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging()
     app = D4FishingWatcherWindow()
-    app.run()
+    try:
+        app.run()
+    finally:
+        logging.shutdown()
 
 
 if __name__ == "__main__":

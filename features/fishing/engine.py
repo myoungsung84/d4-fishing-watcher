@@ -41,7 +41,7 @@ from core.screen import (
 )
 
 USER_LOG_MAX_LINES = 14
-LOGGER = logging.getLogger("d4_fishing_watcher.fishing")
+LOGGER = logging.getLogger(__name__)
 
 
 class LogColor:
@@ -186,6 +186,12 @@ def refresh_diablo_window_rect(log_missing: bool = True) -> Optional[WindowRect]
             f"[WINDOW] rect screen=({rect.left},{rect.top},{rect.width}x{rect.height})"
         )
     return rect
+
+
+def set_current_window_rect(rect: Optional[WindowRect]) -> None:
+    with window_rect_lock:
+        global current_window_rect
+        current_window_rect = rect
 
 
 def get_current_window_rect() -> Optional[WindowRect]:
@@ -362,6 +368,30 @@ def set_fishing_search_roi_from_screen(
         add_user_log("탐색 영역이 너무 작음", "warning")
         return None
 
+    set_current_fishing_search_roi(local_roi)
+    log_success(f"[fishing] current search ROI selected local x={x} y={y} w={width} h={height}")
+    add_user_log("탐색 영역 지정 완료", "start")
+    return local_roi
+
+
+def set_fishing_search_roi_local(
+    roi: tuple[int, int, int, int],
+    window_rect: Optional[WindowRect] = None,
+) -> Optional[tuple[int, int, int, int]]:
+    rect = window_rect or get_current_window_rect() or refresh_diablo_window_rect(log_missing=False)
+    if rect is None:
+        log_warn("[fishing] Diablo IV 창 정보가 없어 선택 ROI를 저장하지 못했습니다")
+        add_user_log("창 정보 없음", "warning")
+        return None
+
+    local_roi = clamp_roi_to_window(roi, rect)
+    x, y, width, height = local_roi
+    if width < config.CONFIG.fishing_roi_min_width or height < config.CONFIG.fishing_roi_min_height:
+        log_warn("[fishing] selected ROI too small, ignored")
+        add_user_log("탐색 영역이 너무 작음", "warning")
+        return None
+
+    set_current_window_rect(rect)
     set_current_fishing_search_roi(local_roi)
     log_success(f"[fishing] current search ROI selected local x={x} y={y} w={width} h={height}")
     add_user_log("탐색 영역 지정 완료", "start")

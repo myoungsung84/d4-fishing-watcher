@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -7,6 +8,7 @@ import numpy as np
 
 Roi = Optional[Tuple[int, int, int, int]]
 DIABLO_WINDOW_TITLE_KEYWORDS = ("Diablo IV", "디아블로 IV")
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -248,6 +250,6 @@ def capture_screen(roi: Roi = None) -> tuple[np.ndarray, CaptureRegion]:
     """Capture Diablo IV as a local-coordinate frame, with full-screen fallback."""
     rect = get_diablo_window_rect()
     if rect is None:
-        print("[screen] Diablo IV window not found; falling back to full virtual screen capture")
+        LOGGER.warning("[screen] Diablo IV window not found; falling back to full virtual screen capture")
         return capture_screen_fallback(roi)
     return capture_window(rect, roi)

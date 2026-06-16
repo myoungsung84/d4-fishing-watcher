@@ -13,6 +13,7 @@ debug/
 data/debug/
 data/*.db
 !data/.gitkeep
+logs/*.log
 *.log
 
 # Runtime capture outputs
