@@ -32,12 +32,6 @@ root에는 실행/문서/데이터 관련 파일만 둔다.
 python -m app.main
 ```
 
-legacy console 실행:
-
-```bash
-python -m app.legacy_console
-```
-
 ## 2. 패키지 역할
 
 ### app
@@ -47,7 +41,6 @@ python -m app.legacy_console
 예:
 
 - GUI 실행 진입점
-- legacy console 실행 진입점
 - 앱 초기화
 
 ### core
@@ -333,17 +326,17 @@ MainWindow
 
 GUI worker 실제 연결 작업은 별도 단계에서 진행한다.
 
-## 9. legacy 유지 원칙
+## 9. 메인 윈도우 실행 원칙
 
-GUI 전환 중에도 legacy console 실행은 보존한다.
+공식 실행 진입점은 메인 윈도우로 유지한다.
 
 다음 명령이 계속 동작해야 한다.
 
 ```bash
-python -m app.legacy_console
+python -m app.main
 ```
 
-engine 분리 작업을 하더라도 legacy console 동작이 깨지면 안 된다.
+낚시 엔진을 변경하더라도 메인 윈도우의 시작/중지 worker 흐름이 깨지면 안 된다.
 
 ## 10. 검증 명령
 
@@ -358,7 +351,6 @@ import smoke test:
 ```bash
 python -c "import app"
 python -c "import app.main"
-python -c "import app.legacy_console"
 python -c "import core"
 python -c "import features.fishing"
 python -c "import ui"

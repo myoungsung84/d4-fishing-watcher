@@ -3,12 +3,13 @@ from __future__ import annotations
 import threading
 from typing import Callable, Optional
 
-from app.state import AppStage, RunStatus
+from app.state import AppStage, RunStatus, WindowStatus
 from features.fishing import engine
 
 LogCallback = Callable[[str], None]
 StateCallback = Callable[[RunStatus], None]
 StepCallback = Callable[[AppStage], None]
+WindowCallback = Callable[[WindowStatus], None]
 
 
 class FishingWorker:
@@ -24,10 +25,12 @@ class FishingWorker:
         on_log: Optional[LogCallback] = None,
         on_state: Optional[StateCallback] = None,
         on_step: Optional[StepCallback] = None,
+        on_window: Optional[WindowCallback] = None,
     ) -> None:
         self._on_log = on_log
         self._on_state = on_state
         self._on_step = on_step
+        self._on_window = on_window
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -68,18 +71,38 @@ class FishingWorker:
         runtime_started = False
         had_error = False
 
-        self._state(RunStatus.RUNNING)
-        self._step(AppStage.READY_TO_RUN)
-        self._log("[WORKER] 낚시 worker thread 시작")
+        self._state(RunStatus.CHECKING_WINDOW)
+        self._step(AppStage.WINDOW_DETECTION)
+        self._log("[START] Diablo IV 창 확인 중")
 
         try:
-            runtime_started = True
-            engine.start_fishing_runtime(
-                enable_overlay=False,
-                wait_for_start_hotkey=False,
+            rect = engine.refresh_diablo_window_rect(log_missing=False)
+            if rect is None:
+                self._window(WindowStatus.NOT_FOUND)
+                self._log("[WINDOW] Diablo IV 창을 찾지 못했습니다. 게임 실행 후 다시 시작하세요.")
+                self._state(RunStatus.IDLE)
+                self._step(AppStage.IDLE)
+                return
+
+            self._window(WindowStatus.FOUND)
+            self._log(
+                "[WINDOW] Diablo IV 창 감지 성공 "
+                f"left={rect.left}, top={rect.top}, width={rect.width}, height={rect.height}"
             )
+
+            if not engine.has_current_fishing_search_roi():
+                self._log("[START] 낚시 영역이 설정되지 않아 실행하지 않습니다.")
+                self._state(RunStatus.IDLE)
+                self._step(AppStage.IDLE)
+                return
+
+            self._state(RunStatus.RUNNING)
+            self._step(AppStage.READY_TO_RUN)
+            self._log("[WORKER] 낚시 worker thread 시작")
+            runtime_started = True
+            engine.start_fishing_runtime()
             session = engine.create_fishing_session()
-            self._log("[WORKER] engine session 준비 완료")
+            self._log("[ENGINE] 낚시 엔진 시작")
 
             while not self._is_stop_requested():
                 if not engine.is_fishing_running():
@@ -130,10 +153,10 @@ class FishingWorker:
             if runtime_started:
                 engine.shutdown_fishing_runtime(clear_roi=False)
 
-            if not had_error:
+            if runtime_started and not had_error:
                 self._state(RunStatus.STOPPED)
                 self._step(AppStage.IDLE)
-                self._log("[WORKER] 중지 완료")
+                self._log("[WORKER] 정상 종료")
 
     def _is_stop_requested(self) -> bool:
         return self._stop_event.is_set()
@@ -149,3 +172,7 @@ class FishingWorker:
     def _step(self, stage: AppStage) -> None:
         if self._on_step is not None:
             self._on_step(stage)
+
+    def _window(self, status: WindowStatus) -> None:
+        if self._on_window is not None:
+            self._on_window(status)

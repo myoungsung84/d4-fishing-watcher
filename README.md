@@ -1,6 +1,6 @@
 # d4-fishing-watcher
 
-Diablo IV 낚시 자동화 보조 프로그램입니다. 현재 핵심 흐름은 `PageUp`으로 이번 낚시터의 탐색 영역을 직접 드래그 지정하고, 지정된 ROI 안에서 Ready 아이콘의 민트/청록 HSV 색상 blob을 연속 프레임으로 확인하는 방식입니다.
+Diablo IV 낚시 자동화 보조 프로그램입니다. 현재 핵심 흐름은 메인 윈도우에서 낚시 영역을 지정한 뒤 시작/중지 버튼으로 낚시 worker를 제어하는 방식입니다.
 
 ## 주의사항
 
@@ -17,30 +17,24 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-`run.bat`도 현재는 GUI를 실행하지만, 앞으로의 기본 UX는 배치 파일이 아니라 메인 윈도우입니다.
+`run.bat`도 같은 메인 윈도우 진입점을 실행합니다.
 
-기존 콘솔/hotkey 중심 실행은 비교 기준으로 유지하며, 패키지 entrypoint로 실행할 수 있습니다.
+## 기본 사용 흐름
 
-```powershell
-python -m app.legacy_console
-```
+1. `python -m app.main` 또는 `run.bat`로 메인 윈도우를 실행합니다.
+2. `낚시 영역 설정` 버튼으로 현재 낚시터의 탐색 영역을 드래그 지정합니다.
+3. `시작` 버튼을 누르면 Diablo IV 창을 확인한 뒤 worker가 낚시 엔진을 실행합니다.
+4. `중지` 버튼을 누르면 기존 엔진의 중지 플래그를 통해 현재 루프를 안전하게 빠져나옵니다.
 
-## 단축키
-
-- `PageUp`: 낚시터 탐색 영역을 드래그 지정하고 자동 낚시 시작
-- `PageDown`: 자동 낚시 중단
-- `ESC` / `F12`: 자동 낚시 중단
-- `Ctrl+C`: 프로그램 종료
-
-`current_fishing_search_roi`는 파일이나 프로필에 저장하지 않습니다. PageUp으로 지정한 ROI는 현재 실행 세션에서만 유지되며, PageDown/ESC/F12 중단이나 프로그램 종료 시 폐기됩니다. 단, 같은 자리에서 30초 timeout 후 pull and recast를 반복할 때는 ROI를 유지합니다.
+`current_fishing_search_roi`는 파일이나 프로필에 저장하지 않습니다. 지정한 ROI는 현재 실행 세션에서만 유지되며, 프로그램 종료 시 폐기됩니다. 단, 같은 자리에서 30초 timeout 후 pull and recast를 반복할 때는 ROI를 유지합니다.
 
 ## 현재 감지 흐름
 
-1. PageUp으로 fishing search ROI를 수동 지정합니다.
+1. 메인 윈도우에서 fishing search ROI를 수동 지정합니다.
 2. 캐스팅 후 지정 ROI 안에서 찌 후보를 wide search합니다.
 3. 후보를 찾으면 `active_bobber_roi`로 추적합니다.
 4. 추적 실패 시 주변 확장 reacquire를 수행합니다.
-5. reacquire가 계속 실패하면 다시 PageUp으로 지정한 search ROI 안에서 wide search합니다.
+5. reacquire가 계속 실패하면 지정된 search ROI 안에서 wide search합니다.
 6. Ready는 template fallback을 유지하되, 기본적으로 HSV 색상 blob 연속 감지를 함께 사용합니다.
 7. 30초 동안 Ready/Bite가 없으면 reel_key를 입력한 뒤 같은 ROI로 재캐스팅합니다.
 
@@ -66,12 +60,11 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 
 - `app/`: GUI 앱 진입점, 상태 enum, 경로 helper, 공용 logger
 - `app/config.py`: 런타임 설정값
-- `app/legacy_console.py`: 기존 콘솔/hotkey 실행 호환 entrypoint
 - `ui/`: Tkinter 메인 윈도우
-- `ui/overlay.py`: 기존 Tkinter overlay와 ROI 선택 UI
 - `core/`: Diablo IV 창 탐지, 화면 캡처, 좌표 helper
-- `features/`: 향후 낚시 실행 엔진 분리 위치
-- `features/fishing/engine.py`: legacy 콘솔 낚시 루프, hotkey, ROI 세션 상태, tracking/reacquire/timeout 흐름
+- `features/`: 낚시 실행 기능
+- `features/fishing/worker.py`: 메인 UI와 낚시 엔진 사이의 실행 worker
+- `features/fishing/engine.py`: 낚시 사이클, ROI 세션 상태, tracking/reacquire/timeout 흐름
 - `features/fishing/detector.py`: template fallback 및 Ready HSV 색상 blob 감지
 - `features/fishing/actions.py`: 키/마우스 입력 helper
 - `templates/`: start/ready template fallback 이미지
@@ -79,28 +72,21 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 
 ## 검증
 
-문법 검사는 다음 명령으로 수행합니다.
+문법 검사와 import smoke test는 다음 명령으로 수행합니다.
 
 ```powershell
 python -m compileall .
-python -c "import app.main; import ui.main_window"
+python -c "import app; import core; import features.fishing; import ui"
 ```
-
-이 프로그램은 실제 게임 화면, ROI 지정, HSV 색상 감지, Tkinter overlay, 키 입력 동작이 핵심이라 수동 검증이 중요합니다.
 
 수동 확인 항목:
 
 - `python -m app.main` 또는 `run.bat` 실행
-- 필요 시 `python -m app.legacy_console` 실행
-- `PageUp` ROI 드래그 후 자동 시작
-- READY DEBUG에서 Ready color hits 표시 확인
-- `PageDown` 중단
-- `ESC` / `F12` 중단
-- 30초 timeout 후 reel/recast 확인
-
-## Tkinter Overlay 주의
-
-Tkinter 객체는 `ui/overlay.py`의 overlay UI thread에서만 생성/갱신/삭제합니다. 외부 스레드는 `OverlayController` queue에 command만 넣습니다. PageUp ROI 선택 오버레이도 새 `Tk()`를 만들지 않고 기존 root의 `Toplevel`로 생성합니다.
+- Diablo IV 미실행 상태에서 `시작` 클릭 후 실패 안내와 시작 버튼 재사용 가능 여부 확인
+- Diablo IV 실행 상태에서 `낚시 영역 설정` 후 `시작` 클릭
+- worker 실행 중 메인 UI가 멈추지 않는지 확인
+- `중지` 버튼으로 실행 종료 및 버튼/상태 복구 확인
+- 별도 실행 상태 창이 나타나지 않는지 확인
 
 ## 튜닝 포인트
 

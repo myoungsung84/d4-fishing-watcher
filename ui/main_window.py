@@ -10,7 +10,6 @@ from typing import Callable, Optional
 
 from app.logger import AppLogger
 from app.state import AppStage, RunStatus, WindowStatus
-from core.screen import WindowRect
 from features.fishing import engine
 from features.fishing.worker import FishingWorker
 
@@ -19,12 +18,13 @@ class WorkerEventType(Enum):
     LOG = auto()
     STATE = auto()
     STEP = auto()
+    WINDOW = auto()
 
 
 @dataclass(frozen=True)
 class WorkerEvent:
     event_type: WorkerEventType
-    payload: str | RunStatus | AppStage
+    payload: str | RunStatus | AppStage | WindowStatus
 
 
 class D4FishingWatcherWindow:
@@ -38,7 +38,7 @@ class D4FishingWatcherWindow:
         self.run_status_var = tk.StringVar(value=RunStatus.IDLE.value)
         self.stage_var = tk.StringVar(value=AppStage.IDLE.value)
         self.roi_status_var = tk.StringVar(value="미설정")
-        self.detail_var = tk.StringVar(value="메인 윈도우 UX 1차 MVP")
+        self.detail_var = tk.StringVar(value="메인 윈도우에서 낚시 실행 상태를 제어합니다")
         self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
         self._fishing_worker: Optional[FishingWorker] = None
         self._roi_window: Optional[tk.Toplevel] = None
@@ -86,25 +86,18 @@ class D4FishingWatcherWindow:
         button_frame = ttk.Frame(self.root, padding=(16, 8))
         button_frame.grid(row=2, column=0, sticky="ew")
 
-        self.detect_button = ttk.Button(
-            button_frame,
-            text="창 감지 테스트",
-            command=self._on_detect_window,
-        )
-        self.detect_button.grid(row=0, column=0, sticky="w")
-
         self.start_button = ttk.Button(button_frame, text="시작", command=self._on_start)
-        self.start_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.start_button.grid(row=0, column=0, sticky="w")
 
         self.stop_button = ttk.Button(button_frame, text="중지", command=self._on_stop)
-        self.stop_button.grid(row=0, column=2, sticky="w", padx=(8, 0))
+        self.stop_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         self.roi_button = ttk.Button(
             button_frame,
             text="낚시 영역 설정",
             command=self._on_select_roi,
         )
-        self.roi_button.grid(row=0, column=3, sticky="w", padx=(8, 0))
+        self.roi_button.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
         log_frame = ttk.LabelFrame(self.root, text="로그", padding=(12, 10))
         log_frame.grid(row=3, column=0, sticky="nsew", padx=16, pady=(8, 16))
@@ -136,46 +129,6 @@ class D4FishingWatcherWindow:
         value = ttk.Label(frame, textvariable=value_var, font=("Segoe UI", 13, "bold"))
         value.grid(row=0, column=0, sticky="w")
 
-    def _on_detect_window(self) -> None:
-        self._set_stage(AppStage.WINDOW_DETECTION)
-        self.detect_button.configure(state=tk.DISABLED)
-        self.logger.log("[WINDOW] Diablo IV 창 감지 테스트 시작")
-        thread = threading.Thread(target=self._detect_window_worker, daemon=True)
-        thread.start()
-
-    def _detect_window_worker(self) -> None:
-        try:
-            from core.screen import find_diablo_window_rect
-
-            rect = find_diablo_window_rect()
-        except Exception as exc:
-            self._ui_call(lambda exc=exc: self._handle_detect_error(exc))
-            return
-
-        self._ui_call(lambda: self._handle_detect_result(rect))
-
-    def _handle_detect_result(self, rect: WindowRect | None) -> None:
-        self.detect_button.configure(state=tk.NORMAL)
-        if rect is None:
-            self.window_status_var.set(WindowStatus.NOT_FOUND.value)
-            self._set_stage(AppStage.IDLE)
-            self.logger.log("[WINDOW] Diablo IV 창을 찾지 못했습니다.")
-            return
-
-        self.window_status_var.set(WindowStatus.FOUND.value)
-        self._set_stage(AppStage.READY_TO_RUN)
-        self.logger.log(
-            "[WINDOW] 감지됨 "
-            f"left={rect.left}, top={rect.top}, width={rect.width}, height={rect.height}"
-        )
-
-    def _handle_detect_error(self, exc: Exception) -> None:
-        self.detect_button.configure(state=tk.NORMAL)
-        self.window_status_var.set(WindowStatus.NOT_FOUND.value)
-        self.run_status_var.set(RunStatus.ERROR.value)
-        self._set_stage(AppStage.IDLE)
-        self.logger.log(f"[ERROR] 창 감지 실패: {exc}")
-
     def _on_start(self) -> None:
         worker = self._fishing_worker
         if worker is not None and worker.is_running():
@@ -185,20 +138,16 @@ class D4FishingWatcherWindow:
         if worker is not None:
             self._handle_worker_finished()
 
-        if not engine.has_current_fishing_search_roi():
-            self._refresh_roi_status()
-            self.logger.log("[START] 먼저 낚시 영역을 설정하세요.")
-            return
-
-        self._set_stage(AppStage.READY_TO_RUN)
-        self._apply_run_status(RunStatus.RUNNING)
-        self.logger.log("[START] 낚시 worker 시작 요청")
+        self._set_stage(AppStage.WINDOW_DETECTION)
+        self._apply_run_status(RunStatus.CHECKING_WINDOW)
+        self.logger.log("[START] 시작 요청")
 
         try:
             worker = FishingWorker(
                 on_log=self._enqueue_worker_log,
                 on_state=self._enqueue_worker_state,
                 on_step=self._enqueue_worker_step,
+                on_window=self._enqueue_worker_window,
             )
             self._fishing_worker = worker
             started = worker.start()
@@ -359,6 +308,9 @@ class D4FishingWatcherWindow:
     def _enqueue_worker_step(self, stage: AppStage) -> None:
         self.worker_events.put(WorkerEvent(WorkerEventType.STEP, stage))
 
+    def _enqueue_worker_window(self, status: WindowStatus) -> None:
+        self.worker_events.put(WorkerEvent(WorkerEventType.WINDOW, status))
+
     def _poll_worker_events(self) -> None:
         while True:
             try:
@@ -385,6 +337,10 @@ class D4FishingWatcherWindow:
 
         if event.event_type is WorkerEventType.STEP and isinstance(payload, AppStage):
             self._set_stage(payload)
+            return
+
+        if event.event_type is WorkerEventType.WINDOW and isinstance(payload, WindowStatus):
+            self.window_status_var.set(payload.value)
 
     def _cleanup_finished_worker(self) -> None:
         worker = self._fishing_worker
@@ -395,9 +351,10 @@ class D4FishingWatcherWindow:
 
     def _handle_worker_finished(self) -> None:
         self._fishing_worker = None
-        if self._worker_status is RunStatus.ERROR:
+        if self._worker_status in (RunStatus.ERROR, RunStatus.IDLE):
             self.start_button.configure(state=tk.NORMAL)
             self.stop_button.configure(state=tk.DISABLED)
+            self.roi_button.configure(state=tk.NORMAL)
             return
 
         self._apply_run_status(RunStatus.STOPPED)
@@ -407,7 +364,7 @@ class D4FishingWatcherWindow:
         self._worker_status = status
         self.run_status_var.set(status.value)
 
-        if status is RunStatus.RUNNING:
+        if status in (RunStatus.CHECKING_WINDOW, RunStatus.RUNNING):
             self.start_button.configure(state=tk.DISABLED)
             self.stop_button.configure(state=tk.NORMAL)
             self.roi_button.configure(state=tk.DISABLED)

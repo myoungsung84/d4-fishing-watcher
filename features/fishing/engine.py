@@ -7,12 +7,13 @@ import time
 import math
 import random
 import base64
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Protocol
+from typing import Any, Deque, Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -35,21 +36,12 @@ from core.screen import (
     capture_screen,
     clamp_roi_to_window,
     find_diablo_window_rect,
-    get_active_window_title,
-    get_foreground_rect,
-    is_target_window_active,
     local_to_screen_point,
     screen_roi_to_local_roi,
 )
-from ui.overlay import OverlayController, OverlaySnapshot
 
 USER_LOG_MAX_LINES = 14
-
-
-def _get_keyboard_module():
-    from pynput import keyboard
-
-    return keyboard
+LOGGER = logging.getLogger("d4_fishing_watcher.fishing")
 
 
 class LogColor:
@@ -65,23 +57,23 @@ class LogColor:
 
 
 def log_info(message: str) -> None:
-    print(f"{LogColor.CYAN}{message}{LogColor.RESET}")
+    LOGGER.info(message)
 
 
 def log_success(message: str) -> None:
-    print(f"{LogColor.GREEN}{message}{LogColor.RESET}")
+    LOGGER.info(message)
 
 
 def log_warn(message: str) -> None:
-    print(f"{LogColor.YELLOW}{message}{LogColor.RESET}")
+    LOGGER.warning(message)
 
 
 def log_error(message: str) -> None:
-    print(f"{LogColor.RED}{message}{LogColor.RESET}")
+    LOGGER.error(message)
 
 
 def log_dim(message: str) -> None:
-    print(f"{LogColor.GRAY}{message}{LogColor.RESET}")
+    LOGGER.debug(message)
 
 
 @dataclass
@@ -104,16 +96,6 @@ class FishingSession:
     start_template: TemplateImage
     ready_template: TemplateImage
     default_ready_roi_local: Optional[tuple[int, int, int, int]]
-
-
-class HotkeyListener(Protocol):
-    daemon: bool
-
-    def start(self) -> None:
-        ...
-
-    def stop(self) -> None:
-        ...
 
 
 state = RuntimeState()
@@ -171,8 +153,6 @@ session_stats = FishingSessionStats()
 total_stats = FishingTotalStats()
 session_stats_lock = threading.Lock()
 user_logs = UserLogBuffer(max_lines=USER_LOG_MAX_LINES)
-overlay_controller: Optional[OverlayController] = None
-hotkey_listener: Optional[HotkeyListener] = None
 STATS_DB_PATH = config.resolve_path("data/fishing_stats.db")
 today_cast_count = 0
 today_catch_count = 0
@@ -183,14 +163,13 @@ last_ready_icon_pos: Optional[tuple[int, int]] = None
 last_start_icon_pos: Optional[tuple[int, int]] = None
 last_ready_miss_saved_at: float = 0.0
 ready_debug_snapshot: Optional[Dict[str, Any]] = None
-last_ready_debug_overlay_update_at: float = 0.0
+last_ready_debug_update_at: float = 0.0
 current_fishing_search_roi: Optional[tuple[int, int, int, int]] = None
 roi_selection_in_progress = False
 roi_selection_cancel_requested = False
 roi_state_lock = threading.Lock()
 current_window_rect: Optional[WindowRect] = None
 window_rect_lock = threading.Lock()
-start_hotkey_enabled = True
 clear_roi_on_stop = True
 
 
@@ -291,9 +270,6 @@ def is_roi_selection_cancel_requested() -> bool:
 def add_user_log(message: str, log_type: str = "info") -> None:
     user_logs.add(message, log_type)
 
-    if overlay_controller is not None:
-        overlay_controller.update_snapshot(build_overlay_snapshot())
-
 
 def encode_ready_debug_image(crop_bgr: Optional[np.ndarray]) -> Optional[str]:
     if crop_bgr is None or crop_bgr.size == 0:
@@ -333,16 +309,16 @@ def update_ready_debug_snapshot(
     candidates: Optional[List[Dict[str, Any]]] = None,
     ready_color: Optional[Dict[str, Any]] = None,
 ) -> None:
-    global ready_debug_snapshot, last_ready_debug_overlay_update_at
+    global ready_debug_snapshot, last_ready_debug_update_at
     now = time.monotonic()
     image_updated = (
         crop_bgr is not None
-        and now - last_ready_debug_overlay_update_at >= config.CONFIG.ready_debug_overlay_interval
+        and now - last_ready_debug_update_at >= config.CONFIG.ready_debug_interval
     )
     image_data = None
     if image_updated:
         image_data = encode_ready_debug_image(crop_bgr)
-        last_ready_debug_overlay_update_at = now
+        last_ready_debug_update_at = now
 
     ready_debug_snapshot = {
         "enabled": True,
@@ -364,15 +340,10 @@ def update_ready_debug_snapshot(
         "image_updated": image_updated,
     }
 
-    if overlay_controller is not None and state.running:
-        overlay_controller.update_snapshot(build_overlay_snapshot())
-
 
 def clear_ready_debug_snapshot() -> None:
     global ready_debug_snapshot
     ready_debug_snapshot = None
-    if overlay_controller is not None:
-        overlay_controller.update_snapshot(build_overlay_snapshot())
 
 
 def set_fishing_search_roi_from_screen(
@@ -435,8 +406,6 @@ def request_fishing_stop(*, clear_roi: bool = True) -> None:
     state.stop_requested = True
     state.idle_announced = False
     request_roi_selection_cancel(True)
-    if overlay_controller is not None:
-        overlay_controller.cancel_roi_selection()
     if clear_roi:
         clear_current_fishing_search_roi()
     set_roi_selection_in_progress(False)
@@ -447,30 +416,6 @@ def request_fishing_stop(*, clear_roi: bool = True) -> None:
 
 def is_fishing_running() -> bool:
     return state.running
-
-
-def begin_fishing_roi_selection() -> None:
-    if state.running:
-        log_warn("[fishing] already running. Stop before selecting a new fishing area.")
-        add_user_log("중단 후 영역 재지정 가능", "warning")
-        return
-
-    if is_roi_selection_in_progress():
-        return
-
-    clear_current_fishing_search_roi()
-    request_roi_selection_cancel(False)
-    set_roi_selection_in_progress(True)
-    log_info("[fishing] ROI selection started")
-    add_user_log("탐색 영역 드래그 지정 중", "wait")
-
-    if overlay_controller is None:
-        set_roi_selection_in_progress(False)
-        log_error("[fishing] overlay controller is not ready")
-        add_user_log("오버레이 준비 실패", "error")
-        return
-
-    overlay_controller.request_roi_selection(start_fishing_after_roi_selection)
 
 
 def format_duration(seconds: float) -> str:
@@ -709,78 +654,6 @@ def save_fishing_stats() -> None:
         add_user_log("상태 확인 필요", "error")
 
 
-def build_overlay_snapshot() -> OverlaySnapshot:
-    _refresh_today_cache_if_needed()
-
-    with session_stats_lock:
-        started_at = session_stats.started_at
-        ended_at = session_stats.ended_at
-        session_cast_count = session_stats.cast_count
-        session_catch_count = session_stats.catch_count
-        stats_running = session_stats.is_running
-        base_total_cast_count = total_stats.total_cast_count
-        base_total_catch_count = total_stats.total_catch_count
-        base_total_run_seconds = total_stats.total_run_seconds
-        active_run_started_at = run_started_at
-
-    session_elapsed_seconds = 0
-    if stats_running and active_run_started_at is not None:
-        session_elapsed_seconds = max(0, int(time.time() - active_run_started_at))
-
-    if stats_running:
-        today_cast_display = today_cast_count + session_cast_count
-        today_catch_display = today_catch_count + session_catch_count
-        today_run_display = today_run_seconds + session_elapsed_seconds
-    else:
-        today_cast_display = today_cast_count
-        today_catch_display = today_catch_count
-        today_run_display = today_run_seconds
-
-    if stats_running:
-        total_cast_count = base_total_cast_count + session_cast_count
-        total_catch_count = base_total_catch_count + session_catch_count
-        total_run_seconds = base_total_run_seconds + session_elapsed_seconds
-    else:
-        total_cast_count = base_total_cast_count
-        total_catch_count = base_total_catch_count
-        total_run_seconds = base_total_run_seconds
-
-    if state.running:
-        status = "실행 중"
-    elif started_at is not None and not stats_running:
-        status = "중단됨"
-    else:
-        status = "대기 중"
-
-    if started_at is None:
-        started_at_text = "-"
-    else:
-        started_at_text = started_at.strftime("%H:%M:%S")
-
-    duration_text = format_duration(today_run_display)
-    total_run_text = format_duration(total_run_seconds)
-
-    anchor_rect = None
-    if is_target_window_active(config.CONFIG.window_keywords):
-        anchor_rect = get_foreground_rect()
-
-    return OverlaySnapshot(
-        title="낚시",
-        status=status,
-        started_at_text=started_at_text,
-        duration_text=duration_text,
-        cast_count=today_cast_display,
-        catch_count=today_catch_display,
-        total_cast_count=total_cast_count,
-        total_catch_count=total_catch_count,
-        total_run_text=total_run_text,
-        logs=user_logs.get_lines(),
-        is_running=stats_running,
-        anchor_rect=anchor_rect,
-        ready_debug=ready_debug_snapshot,
-    )
-
-
 @dataclass(frozen=True)
 class ReadyDetectionResult:
     found: bool
@@ -909,60 +782,6 @@ def get_ready_quick_confirm_failure_reason(
         return f"distance first={first_center} second={second_center}"
 
     return None
-
-
-def normalize_key(key) -> Optional[str]:
-    keyboard = _get_keyboard_module()
-    if key == keyboard.Key.page_up:
-        return "page_up"
-    if key == keyboard.Key.page_down:
-        return "page_down"
-    if key == keyboard.Key.esc:
-        return "esc"
-    if key == keyboard.Key.f12:
-        return "f12"
-    return None
-
-
-def on_key_press(key) -> None:
-    normalized = normalize_key(key)
-
-    if normalized == config.CONFIG.fishing_roi_select_key:
-        if start_hotkey_enabled:
-            begin_fishing_roi_selection()
-    elif normalized in (config.CONFIG.stop_hotkey, "esc", "f12"):
-        request_fishing_stop(clear_roi=clear_roi_on_stop)
-
-
-def start_hotkey_listener() -> HotkeyListener:
-    global hotkey_listener
-    if hotkey_listener is not None:
-        return hotkey_listener
-
-    keyboard = _get_keyboard_module()
-    listener = keyboard.Listener(on_press=on_key_press)
-    listener.daemon = True
-    listener.start()
-    hotkey_listener = listener
-    return listener
-
-
-def stop_hotkey_listener() -> None:
-    global hotkey_listener
-    listener = hotkey_listener
-    if listener is None:
-        return
-    listener.stop()
-    hotkey_listener = None
-
-
-def wait_until_started() -> None:
-    if not state.idle_announced:
-        log_dim("[IDLE] PageUp 영역 지정 후 시작 / PageDown 중단 / ESC,F12 중단 / Ctrl+C 종료")
-        state.idle_announced = True
-
-    while not state.running:
-        time.sleep(0.2)
 
 
 def should_stop() -> bool:
@@ -1681,7 +1500,7 @@ def select_best_bobber_candidate(candidates: List[BobberCandidate]) -> Optional[
 def locate_active_bobber_roi_in_current_search_area() -> Optional[tuple[int, int, int, int]]:
     search_roi = get_current_fishing_search_roi()
     if search_roi is None:
-        log_warn("[fishing] search ROI is not selected. Press PageUp and drag fishing area first.")
+        log_warn("[fishing] search ROI is not selected. Set the fishing area in the main window first.")
         return None
 
     if config.CONFIG.bobber_debug_log:
@@ -1816,7 +1635,7 @@ def detect_ready_color_candidate(
     return blob, frame_bgr
 
 
-def update_bobber_debug_overlay(
+def update_bobber_debug_snapshot(
     tracking: BobberTrackingState,
     *,
     threshold: float,
@@ -1887,7 +1706,7 @@ def reacquire_or_fallback_bobber(
         )
         wide_search_roi = build_bobber_wide_search_roi()
         if wide_search_roi is None:
-            log_warn("[fishing] search ROI is not selected. Press PageUp and drag fishing area first.")
+            log_warn("[fishing] search ROI is not selected. Set the fishing area in the main window first.")
             return None
         search_roi = wide_search_roi
 
@@ -2229,7 +2048,7 @@ def wait_ready_icon(
         f"[READY] scan fps={config.CONFIG.ready_scan_fps:.1f} interval={config.CONFIG.ready_poll_interval:.3f}s"
     )
     log_dim(
-        f"[READY DEBUG] overlay fps={config.CONFIG.ready_debug_overlay_fps:.1f} interval={config.CONFIG.ready_debug_overlay_interval:.3f}s"
+        f"[READY DEBUG] fps={config.CONFIG.ready_debug_fps:.1f} interval={config.CONFIG.ready_debug_interval:.3f}s"
     )
 
     while True:
@@ -2313,7 +2132,7 @@ def wait_ready_icon(
                     )
 
             if not result.found:
-                update_bobber_debug_overlay(
+                update_bobber_debug_snapshot(
                     bobber_tracking,
                     threshold=threshold,
                     score=result.score,
@@ -2408,7 +2227,7 @@ def wait_ready_icon(
                 selected_candidate,
                 status="bite detected",
             )
-            update_bobber_debug_overlay(
+            update_bobber_debug_snapshot(
                 bobber_tracking,
                 threshold=threshold,
                 score=result.score,
@@ -2785,32 +2604,19 @@ def handle_fishing_cycle_timeout() -> None:
     time.sleep(config.CONFIG.next_cast_stabilize_after_timeout)
 
 
-def start_fishing_runtime(
-    *,
-    enable_overlay: bool = True,
-    wait_for_start_hotkey: bool = True,
-) -> None:
-    global overlay_controller, start_hotkey_enabled, clear_roi_on_stop
-    start_hotkey_enabled = wait_for_start_hotkey
-    clear_roi_on_stop = wait_for_start_hotkey
+def start_fishing_runtime() -> None:
+    global clear_roi_on_stop
+    clear_roi_on_stop = False
     state.running = False
     state.stop_requested = False
     state.idle_announced = False
     load_fishing_stats()
-    if enable_overlay:
-        overlay_controller = OverlayController()
-        overlay_controller.start()
-        overlay_controller.update_snapshot(build_overlay_snapshot())
-    else:
-        overlay_controller = None
-    start_hotkey_listener()
-    if not wait_for_start_hotkey:
-        log_success("[START] 자동 낚시 시작")
-        start_session_stats()
-        state.running = True
-        state.stop_requested = False
-        state.idle_announced = False
-        add_user_log("낚시 시작", "start")
+    log_success("[START] 자동 낚시 시작")
+    start_session_stats()
+    state.running = True
+    state.stop_requested = False
+    state.idle_announced = False
+    add_user_log("낚시 시작", "start")
 
 
 def create_fishing_session() -> FishingSession:
@@ -2829,89 +2635,14 @@ def create_fishing_session() -> FishingSession:
 
 
 def shutdown_fishing_runtime(*, clear_roi: bool = True) -> None:
-    global overlay_controller, start_hotkey_enabled, clear_roi_on_stop
+    global clear_roi_on_stop
     request_roi_selection_cancel(True)
-    if overlay_controller is not None:
-        overlay_controller.cancel_roi_selection()
     if clear_roi:
         clear_current_fishing_search_roi()
     stop_session_stats()
-    stop_hotkey_listener()
     state.running = False
     state.stop_requested = True
     state.idle_announced = False
-    start_hotkey_enabled = True
     clear_roi_on_stop = True
     _flush_run_time_once()
     save_fishing_stats()
-    if overlay_controller is not None:
-        overlay_controller.stop()
-        overlay_controller = None
-
-
-def run() -> None:
-    start_fishing_runtime()
-    try:
-        session = create_fishing_session()
-
-        log_info("[BOOT] d4-fishing-watcher")
-        log_info("[BOOT] PageUp 시작 / PageDown 중단 / Ctrl+C 종료")
-        log_info(
-            f"[BOOT] fallback base: {config.CONFIG.fallback_base_width}x{config.CONFIG.fallback_base_height}"
-        )
-        log_info(
-            f"[BOOT] loot center ratio: ({config.CONFIG.loot_center_ratio_x:.2f}, {config.CONFIG.loot_center_ratio_y:.2f})"
-        )
-        log_dim(f"[BOOT] window keywords: {config.CONFIG.window_keywords}")
-        log_dim(f"[BOOT] dry_run: {config.CONFIG.dry_run}")
-        log_dim("[BOOT] ready/loot templates and hotkeys loaded")
-
-        while True:
-            wait_until_started()
-
-            if should_stop():
-                continue
-
-            if get_current_fishing_search_roi() is None:
-                log_warn("[fishing] search ROI is not selected. Press PageUp and drag fishing area first.")
-                add_user_log("PageUp으로 탐색 영역 먼저 지정", "warning")
-                stop_session_stats()
-                state.running = False
-                state.stop_requested = True
-                state.idle_announced = False
-                clear_ready_debug_snapshot()
-                continue
-
-            clear_ready_debug_snapshot()
-
-            refresh_diablo_window_rect(log_missing=True)
-            session.default_ready_roi_local = get_default_ready_roi_local()
-
-            cycle_result = run_fishing_cycle(session)
-
-            if cycle_result is FishingCycleResult.TIMEOUT:
-                handle_fishing_cycle_timeout()
-                continue
-
-            if cycle_result is FishingCycleResult.CANCELLED:
-                continue
-
-            if cycle_result is FishingCycleResult.FAILED:
-                continue
-
-            if cycle_result is FishingCycleResult.RETRY:
-                continue
-
-            if cycle_result is FishingCycleResult.SUCCESS:
-                continue
-    except KeyboardInterrupt:
-        print("\n[EXIT] interrupted by user")
-    except Exception:
-        add_user_log("상태 확인 필요", "error")
-        raise
-    finally:
-        shutdown_fishing_runtime()
-
-
-if __name__ == "__main__":
-    run()

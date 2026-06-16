@@ -43,10 +43,9 @@ class FishingWorkflowContext:
 class FishingEngine:
     """Boundary for the future UI/worker-driven fishing workflow.
 
-    The legacy implementation in features.fishing.engine still owns hotkeys,
-    overlay lifetime, global RuntimeState, and the concrete fishing loop. This
-    class is intentionally thin for now: it defines the callbacks and stop
-    contract that the loop will use when the cycle is moved behind the worker.
+    The concrete implementation in features.fishing.engine still owns the
+    RuntimeState and fishing cycle. This class is intentionally thin for now:
+    it defines the callbacks and stop contract used by worker-driven execution.
     """
 
     def __init__(

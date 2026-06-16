@@ -9,7 +9,8 @@ class WindowStatus(str, Enum):
 
 
 class RunStatus(str, Enum):
-    IDLE = "대기"
+    IDLE = "대기 중"
+    CHECKING_WINDOW = "Diablo IV 창 확인 중"
     RUNNING = "실행 중"
     STOPPING = "중지 중"
     STOPPED = "중지됨"
