@@ -29,6 +29,25 @@ python -m app.main
 
 `current_fishing_search_roi`는 파일이나 프로필에 저장하지 않습니다. 실행 중에는 선택한 ROI를 유지하지만, 다음 시작 시에는 이전 ROI를 자동 재사용하지 않고 반드시 새로 선택합니다. 단, 같은 실행 안에서 30초 timeout 후 pull and recast를 반복할 때는 ROI를 유지합니다.
 
+## 단축키
+
+기본 전역 단축키:
+
+- 시작: `F11`
+- 중지: `F12`
+
+메인 윈도우의 `단축키 설정` 버튼에서 시작/중지 단축키를 변경할 수 있습니다. 변경 사항은 저장 즉시 전역 listener에 반영되고 `data/settings.json`에 저장되어 다음 실행에도 유지됩니다.
+
+허용 키:
+
+- `F1` ~ `F12`
+- `A` ~ `Z`
+- `0` ~ `9`
+- `Num0` ~ `Num9`
+- `Insert`, `Home`, `End`, `PageUp`, `PageDown`
+
+조합키는 지원하지 않습니다. `ESC`, `Ctrl`, `Alt`, `Shift`, 방향키, Enter, Space, Tab, CapsLock, 마우스 버튼 등은 단축키로 저장할 수 없습니다. 단축키 등록에 실패해도 앱은 종료되지 않으며, 시작/중지 버튼으로 계속 조작할 수 있습니다.
+
 ## 현재 감지 흐름
 
 1. 시작 시 Diablo IV 창 위에서 fishing search ROI를 수동 지정합니다.
@@ -60,9 +79,10 @@ READY_COLOR_HSV_UPPER = (92, 255, 255)
 ## 폴더 구조
 
 - `app/`: GUI 앱 진입점, 상태 enum, 경로 helper, 공용 logger
+- `app/settings.py`: 사용자 설정 JSON 읽기/쓰기와 단축키 검증
 - `app/config.py`: 런타임 설정값
 - `ui/`: Tkinter 메인 윈도우
-- `core/`: Diablo IV 창 탐지, 화면 캡처, 좌표 helper
+- `core/`: Diablo IV 창 탐지, 화면 캡처, 좌표 helper, 전역 단축키 listener
 - `features/`: 낚시 실행 기능
 - `features/fishing/worker.py`: 메인 UI와 낚시 엔진 사이의 실행 worker
 - `features/fishing/engine.py`: 낚시 사이클, ROI 세션 상태, tracking/reacquire/timeout 흐름
@@ -95,7 +115,11 @@ python -c "import app; import core; import features.fishing; import ui"
 수동 확인 항목:
 
 - `python -m app.main` 또는 `run.bat` 실행
+- 기본 단축키 `F11`/`F12` 등록 여부 확인
+- 단축키 설정창에서 허용 키/금지 키/동일 키 충돌 확인
+- 저장 후 `data/settings.json` 생성 및 재실행 유지 확인
 - Diablo IV 미실행 상태에서 `시작` 클릭 후 실패 안내와 시작 버튼 재사용 가능 여부 확인
+- Diablo IV 미실행 상태에서 시작 단축키 입력 후 같은 흐름 확인
 - Diablo IV 실행 상태에서 `시작` 클릭 후 영역 선택 UI 표시 확인
 - 영역 선택 취소 후 다시 시작 가능 여부 확인
 - 영역 선택 완료 후 worker 실행 확인
@@ -128,6 +152,7 @@ Git에서 제외하는 항목:
 - `__pycache__/`
 - `debug/`, `data/debug/`
 - `data/*.db`
+- `data/settings.json`
 - `logs/*.log`
 - 빌드 산출물과 로컬 환경 파일
 

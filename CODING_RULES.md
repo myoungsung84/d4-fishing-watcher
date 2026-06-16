@@ -53,6 +53,7 @@ python -m app.main
 - 공통 설정
 - 공통 유틸
 - 공통 상태 모델
+- 전역 단축키 listener 관리
 
 단, 낚시 기능에만 종속되는 도메인 로직은 core로 올리지 않는다.
 
@@ -338,7 +339,16 @@ python -m app.main
 
 낚시 엔진을 변경하더라도 메인 윈도우의 시작/중지 worker 흐름이 깨지면 안 된다.
 
-## 10. 검증 명령
+## 10. 전역 단축키 원칙
+
+전역 단축키 listener는 core 계층에서 관리한다.
+
+- UI, Worker, Engine에서 pynput listener를 직접 생성하지 않는다.
+- listener callback은 Tkinter widget을 직접 수정하지 않고 UI queue나 callback을 통해 UI 스레드로 전달한다.
+- 시작/중지 단축키 동작은 메인 윈도우의 기존 버튼 핸들러를 재사용한다.
+- 사용자 단축키 설정은 config.py에 하드코딩하지 않고 별도 사용자 설정 파일에 저장한다.
+
+## 11. 검증 명령
 
 작업 후 기본 검증:
 
@@ -377,7 +387,7 @@ rg "np\.ndarray"
 Pylance 경고는 `compileall`로 확인되지 않는다.  
 VS Code Problems 탭 기준으로 별도 확인한다.
 
-## 11. 작업 보고 규칙
+## 12. 작업 보고 규칙
 
 작업 완료 보고는 아래 형식을 따른다.
 

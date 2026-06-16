@@ -12,6 +12,7 @@ __pycache__/
 debug/
 data/debug/
 data/*.db
+data/settings.json
 !data/.gitkeep
 logs/*.log
 *.log

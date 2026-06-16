@@ -10,7 +10,15 @@ from tkinter import ttk
 from typing import Callable, Optional
 
 from app.logger import AppLogger, get_today_log_path
+from app.settings import (
+    AppSettings,
+    DEFAULT_SETTINGS,
+    load_settings,
+    save_settings,
+    validate_hotkey_pair,
+)
 from app.state import AppStage, RunStatus, WindowStatus
+from core.hotkeys import GlobalHotkeyManager, normalize_tk_key
 from core.screen import WindowRect
 from features.fishing import engine
 from features.fishing.worker import FishingWorker
@@ -47,13 +55,20 @@ class D4FishingWatcherWindow:
         self.detail_var = tk.StringVar(value="시작을 누르면 창 확인 후 감지 영역을 새로 선택합니다.")
         self.last_message_var = tk.StringVar(value="최근 안내 없음")
         self.log_path_var = tk.StringVar(value=str(get_today_log_path()))
+        self.hotkey_summary_var = tk.StringVar(value="")
 
         self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
         self.ui_callbacks: queue.Queue[Callable[[], None]] = queue.Queue()
         self._fishing_worker: Optional[FishingWorker] = None
         self._roi_window: Optional[tk.Toplevel] = None
+        self._hotkey_window: Optional[tk.Toplevel] = None
         self._worker_status = RunStatus.IDLE
         self._detected_window_rect: Optional[WindowRect] = None
+        self._settings: AppSettings = load_settings()
+        self._hotkey_manager = GlobalHotkeyManager(
+            on_start=lambda: self._ui_call(self._on_start_hotkey),
+            on_stop=lambda: self._ui_call(self._on_stop_hotkey),
+        )
         self._closing = False
 
         self.logger = AppLogger(self._append_log_threadsafe)
@@ -61,6 +76,8 @@ class D4FishingWatcherWindow:
         self._build_layout()
         self._set_runtime_state(RunStatus.IDLE, AppStage.IDLE)
         self._refresh_roi_status()
+        self._refresh_hotkey_summary()
+        self._register_hotkeys_on_startup()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._poll_worker_events)
         self.logger.info("[BOOT] GUI ready. 메인 윈도우 실행 흐름 준비 완료.")
@@ -105,10 +122,17 @@ class D4FishingWatcherWindow:
         self.start_button.grid(row=0, column=0, sticky="ew")
         self.stop_button = ttk.Button(control_frame, text="중지", command=self._on_stop)
         self.stop_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.hotkey_button = ttk.Button(
+            control_frame,
+            text="단축키 설정",
+            command=self._open_hotkey_settings_window,
+        )
+        self.hotkey_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
-        self._create_info_row(control_frame, 1, "현재 상태", self.run_status_var)
-        self._create_info_row(control_frame, 2, "현재 단계", self.stage_var)
-        self._create_info_row(control_frame, 3, "최근 안내", self.last_message_var)
+        self._create_info_row(control_frame, 2, "현재 상태", self.run_status_var)
+        self._create_info_row(control_frame, 3, "현재 단계", self.stage_var)
+        self._create_info_row(control_frame, 4, "단축키", self.hotkey_summary_var)
+        self._create_info_row(control_frame, 5, "최근 안내", self.last_message_var)
 
         summary_frame = ttk.LabelFrame(dashboard, text="상태 요약", padding=(14, 12))
         summary_frame.grid(row=0, column=1, sticky="nsew")
@@ -168,7 +192,204 @@ class D4FishingWatcherWindow:
         value = ttk.Label(parent, textvariable=value_var, style="InfoValue.TLabel", wraplength=430)
         value.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=(10 if row else 0, 0))
 
+    def _register_hotkeys_on_startup(self) -> None:
+        try:
+            self._hotkey_manager.start(self._settings.hotkeys)
+            self.logger.info(
+                "[HOTKEY] 전역 단축키 등록 완료 "
+                f"시작={self._settings.hotkeys.start_fishing}, 중지={self._settings.hotkeys.stop_fishing}"
+            )
+        except Exception as exc:
+            LOGGER.exception("Failed to register global hotkeys on startup")
+            self.logger.error(f"[HOTKEY] 전역 단축키 등록 실패: {exc}")
+            self._set_message("단축키 등록에 실패했습니다. 버튼으로 조작할 수 있습니다.")
+
+    def _refresh_hotkey_summary(self) -> None:
+        hotkeys = self._settings.hotkeys
+        self.hotkey_summary_var.set(f"시작: {hotkeys.start_fishing} / 중지: {hotkeys.stop_fishing}")
+
+    def _open_hotkey_settings_window(self) -> None:
+        if self._hotkey_window is not None:
+            try:
+                if self._hotkey_window.winfo_exists():
+                    self._hotkey_window.lift()
+                    self._hotkey_window.focus_force()
+                    return
+            except tk.TclError:
+                self._hotkey_window = None
+
+        window = tk.Toplevel(self.root)
+        self._hotkey_window = window
+        window.title("단축키 설정")
+        window.resizable(False, False)
+        window.transient(self.root)
+        window.grab_set()
+
+        start_var = tk.StringVar(value=self._settings.hotkeys.start_fishing)
+        stop_var = tk.StringVar(value=self._settings.hotkeys.stop_fishing)
+        message_var = tk.StringVar(value="변경 버튼을 누른 뒤 사용할 키 하나를 누르세요.")
+        capture_target: dict[str, Optional[str]] = {"name": None}
+
+        frame = ttk.Frame(window, padding=(18, 16))
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="낚시 시작").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, textvariable=start_var, style="InfoValue.TLabel", width=10).grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(16, 8),
+        )
+        ttk.Button(
+            frame,
+            text="변경",
+            command=lambda: begin_capture("start"),
+        ).grid(row=0, column=2, sticky="ew")
+
+        ttk.Label(frame, text="낚시 중지").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(frame, textvariable=stop_var, style="InfoValue.TLabel", width=10).grid(
+            row=1,
+            column=1,
+            sticky="w",
+            padx=(16, 8),
+            pady=(10, 0),
+        )
+        ttk.Button(
+            frame,
+            text="변경",
+            command=lambda: begin_capture("stop"),
+        ).grid(row=1, column=2, sticky="ew", pady=(10, 0))
+
+        ttk.Label(frame, textvariable=message_var, foreground="#5f6368", wraplength=340).grid(
+            row=2,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(14, 0),
+        )
+
+        button_frame = ttk.Frame(frame)
+        button_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        button_frame.columnconfigure(1, weight=1)
+        ttk.Button(button_frame, text="기본값 복원", command=lambda: restore_defaults()).grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        ttk.Button(button_frame, text="취소", command=lambda: close_window()).grid(
+            row=0,
+            column=2,
+            sticky="e",
+        )
+        ttk.Button(button_frame, text="저장", command=lambda: save_hotkeys()).grid(
+            row=0,
+            column=3,
+            sticky="e",
+            padx=(8, 0),
+        )
+
+        def begin_capture(target: str) -> None:
+            capture_target["name"] = target
+            label = "낚시 시작" if target == "start" else "낚시 중지"
+            message_var.set(f"{label} 단축키로 사용할 키를 눌러주세요. ESC는 변경 취소입니다.")
+            window.focus_force()
+
+        def restore_defaults() -> None:
+            capture_target["name"] = None
+            start_var.set(DEFAULT_SETTINGS.hotkeys.start_fishing)
+            stop_var.set(DEFAULT_SETTINGS.hotkeys.stop_fishing)
+            message_var.set("기본값으로 복원했습니다. 저장을 누르면 반영됩니다.")
+            self.logger.info("[HOTKEY] 기본값 복원 선택")
+
+        def close_window() -> None:
+            self._hotkey_window = None
+            try:
+                window.grab_release()
+            except tk.TclError:
+                pass
+            window.destroy()
+
+        def save_hotkeys() -> None:
+            hotkeys, error = validate_hotkey_pair(start_var.get(), stop_var.get())
+            if hotkeys is None:
+                message_var.set(error or "단축키 설정을 확인하세요.")
+                return
+
+            previous_settings = self._settings
+            next_settings = AppSettings(hotkeys=hotkeys)
+            try:
+                self._hotkey_manager.register(hotkeys)
+            except Exception as exc:
+                LOGGER.exception("Failed to register updated global hotkeys")
+                message_var.set("전역 단축키 등록에 실패했습니다. 기존 설정을 유지합니다.")
+                self.logger.error(f"[HOTKEY] 전역 단축키 등록 실패: {exc}")
+                return
+
+            if not save_settings(next_settings):
+                try:
+                    self._hotkey_manager.register(previous_settings.hotkeys)
+                except Exception:
+                    LOGGER.exception("Failed to restore previous hotkeys after save failure")
+                message_var.set("설정 파일 저장에 실패했습니다. 기존 설정을 유지합니다.")
+                self.logger.error("[HOTKEY] 설정 파일 저장 실패")
+                return
+
+            self._settings = next_settings
+            self._refresh_hotkey_summary()
+            self.logger.info(
+                f"[HOTKEY] 단축키 저장 완료: 시작={hotkeys.start_fishing}, 중지={hotkeys.stop_fishing}"
+            )
+            close_window()
+
+        def on_key_press(event) -> str | None:
+            target = capture_target["name"]
+            if target is None:
+                return None
+
+            if event.keysym == "Escape":
+                capture_target["name"] = None
+                message_var.set("단축키 변경을 취소했습니다.")
+                return "break"
+
+            key_name, error = normalize_tk_key(event.keysym, int(event.keycode), int(event.state))
+            if key_name is None:
+                message_var.set(error or "지원하지 않는 키입니다.")
+                return "break"
+
+            if target == "start":
+                start_var.set(key_name)
+            else:
+                stop_var.set(key_name)
+            capture_target["name"] = None
+            message_var.set(f"{key_name} 키를 선택했습니다. 저장을 누르면 반영됩니다.")
+            return "break"
+
+        window.bind("<KeyPress>", on_key_press)
+        window.protocol("WM_DELETE_WINDOW", close_window)
+        self._center_child_window(window, width=420, height=210)
+        window.focus_force()
+
+    def _center_child_window(self, window: tk.Toplevel, *, width: int, height: int) -> None:
+        self.root.update_idletasks()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_width = max(1, self.root.winfo_width())
+        root_height = max(1, self.root.winfo_height())
+        x = root_x + max(0, (root_width - width) // 2)
+        y = root_y + max(0, (root_height - height) // 2)
+        window.geometry(f"{width}x{height}+{x}+{y}")
+
     def _on_start(self) -> None:
+        if self._worker_status in (
+            RunStatus.CHECKING_WINDOW,
+            RunStatus.SELECTING_ROI,
+            RunStatus.RUNNING,
+            RunStatus.STOPPING,
+        ):
+            LOGGER.debug("Start request ignored in state: %s", self._worker_status.value)
+            return
+
         worker = self._fishing_worker
         if worker is not None and worker.is_running():
             self.logger.warning("[START] 이미 실행 중입니다.")
@@ -379,6 +600,15 @@ class D4FishingWatcherWindow:
             self.logger.warning("[START] worker 시작이 거부되었습니다.")
 
     def _on_stop(self) -> None:
+        if self._worker_status is RunStatus.SELECTING_ROI and self._roi_window is not None:
+            self.logger.info("[HOTKEY] 영역 설정 중지 요청: 선택을 취소합니다.")
+            self._finish_roi_selection(None)
+            return
+
+        if self._worker_status is RunStatus.CHECKING_WINDOW:
+            LOGGER.debug("Stop request ignored during window detection")
+            return
+
         worker = self._fishing_worker
         if worker is None:
             self._set_runtime_state(RunStatus.STOPPED, AppStage.IDLE)
@@ -398,6 +628,38 @@ class D4FishingWatcherWindow:
         self._set_message("중지 요청을 전달했습니다.")
         self.logger.info("[STOP] 낚시 worker 중지 요청")
         worker.stop()
+
+    def _on_start_hotkey(self) -> None:
+        if self._closing:
+            return
+        if self._hotkey_window is not None:
+            LOGGER.debug("Start hotkey ignored while settings window is open")
+            return
+        if self._worker_status not in (RunStatus.IDLE, RunStatus.STOPPED, RunStatus.ERROR):
+            LOGGER.debug("Start hotkey ignored in state: %s", self._worker_status.value)
+            return
+        self._show_main_window_for_hotkey()
+        self.logger.info(f"[HOTKEY] 시작 단축키 입력: {self._settings.hotkeys.start_fishing}")
+        self._on_start()
+
+    def _on_stop_hotkey(self) -> None:
+        if self._closing:
+            return
+        if self._hotkey_window is not None:
+            LOGGER.debug("Stop hotkey ignored while settings window is open")
+            return
+        if self._worker_status not in (RunStatus.RUNNING, RunStatus.SELECTING_ROI, RunStatus.CHECKING_WINDOW):
+            LOGGER.debug("Stop hotkey ignored in state: %s", self._worker_status.value)
+            return
+        self.logger.info(f"[HOTKEY] 중지 단축키 입력: {self._settings.hotkeys.stop_fishing}")
+        self._on_stop()
+
+    def _show_main_window_for_hotkey(self) -> None:
+        try:
+            self.root.deiconify()
+            self.root.lift()
+        except tk.TclError:
+            LOGGER.debug("Failed to raise main window for hotkey", exc_info=True)
 
     def _enqueue_worker_log(self, message: str) -> None:
         self.worker_events.put(WorkerEvent(WorkerEventType.LOG, message))
@@ -532,6 +794,13 @@ class D4FishingWatcherWindow:
         self._closing = True
         if self._roi_window is not None:
             self._finish_roi_selection(None)
+        if self._hotkey_window is not None:
+            try:
+                if self._hotkey_window.winfo_exists():
+                    self._hotkey_window.destroy()
+            except tk.TclError:
+                pass
+            self._hotkey_window = None
 
         worker = self._fishing_worker
         if worker is not None and worker.is_running():
@@ -544,6 +813,12 @@ class D4FishingWatcherWindow:
                 self.logger.error(f"[EXIT] worker 종료 처리 중 오류: {exc}")
             if worker.is_running():
                 self.logger.warning("[EXIT] worker 종료 대기 timeout, daemon thread로 종료를 이어갑니다.")
+
+        try:
+            self._hotkey_manager.stop()
+        except Exception as exc:
+            LOGGER.exception("Global hotkey listener stop failed")
+            self.logger.error(f"[EXIT] 단축키 listener 종료 실패: {exc}")
 
         self.root.destroy()
 
