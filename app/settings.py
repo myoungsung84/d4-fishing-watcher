@@ -16,8 +16,11 @@ DIGITS = {str(index) for index in range(10)}
 NUMPAD_DIGITS = {f"Num{index}" for index in range(10)}
 NAMED_KEYS = {"Insert", "Home", "End", "PageUp", "PageDown"}
 ALLOWED_HOTKEYS = FUNCTION_KEYS | LETTERS | DIGITS | NUMPAD_DIGITS | NAMED_KEYS
+RESERVED_HOTKEYS = {"Escape"}
 
 KEY_ALIASES = {
+    "ESC": "Escape",
+    "ESCAPE": "Escape",
     "PGUP": "PageUp",
     "PAGEUP": "PageUp",
     "PAGE_UP": "PageUp",
@@ -32,20 +35,39 @@ KEY_ALIASES = {
     "END": "End",
 }
 
+PYAUTOGUI_KEY_NAMES = {
+    "PageUp": "pageup",
+    "PageDown": "pagedown",
+    "Insert": "insert",
+    "Home": "home",
+    "End": "end",
+    **{f"F{index}": f"f{index}" for index in range(1, 13)},
+    **{f"Num{index}": f"num{index}" for index in range(10)},
+}
+
 
 @dataclass(frozen=True)
 class HotkeySettings:
-    start_fishing: str = "F11"
-    stop_fishing: str = "F12"
+    start_fishing: str = "PageUp"
+    stop_fishing: str = "PageDown"
+
+
+@dataclass(frozen=True)
+class GameKeySettings:
+    social_menu: str = "3"
+    interact_pickup: str = "R"
+    reel: str = "E"
 
 
 @dataclass(frozen=True)
 class AppSettings:
     hotkeys: HotkeySettings
+    game_keys: GameKeySettings
 
 
 DEFAULT_HOTKEY_SETTINGS = HotkeySettings()
-DEFAULT_SETTINGS = AppSettings(hotkeys=DEFAULT_HOTKEY_SETTINGS)
+DEFAULT_GAME_KEY_SETTINGS = GameKeySettings()
+DEFAULT_SETTINGS = AppSettings(hotkeys=DEFAULT_HOTKEY_SETTINGS, game_keys=DEFAULT_GAME_KEY_SETTINGS)
 
 
 def normalize_hotkey(value: object) -> str | None:
@@ -76,6 +98,15 @@ def normalize_hotkey(value: object) -> str | None:
     return None
 
 
+def normalize_game_key(value: object) -> str | None:
+    normalized = normalize_hotkey(value)
+    if normalized is None:
+        return None
+    if normalized in RESERVED_HOTKEYS:
+        return None
+    return normalized
+
+
 def is_allowed_hotkey(value: object) -> bool:
     normalized = normalize_hotkey(value)
     return normalized in ALLOWED_HOTKEYS
@@ -94,6 +125,35 @@ def validate_hotkey_pair(start_fishing: object, stop_fishing: object) -> tuple[H
     if start == stop:
         return None, "시작과 중지 단축키는 서로 달라야 합니다."
     return HotkeySettings(start_fishing=start, stop_fishing=stop), None
+
+
+def validate_game_keys(
+    social_menu: object,
+    interact_pickup: object,
+    reel: object,
+) -> tuple[GameKeySettings | None, str | None]:
+    normalized_social = normalize_game_key(social_menu)
+    normalized_interact = normalize_game_key(interact_pickup)
+    normalized_reel = normalize_game_key(reel)
+    if normalized_social is None or normalized_interact is None or normalized_reel is None:
+        return None, "게임 조작키 값이 비어 있거나 지원하지 않는 키입니다."
+    return (
+        GameKeySettings(
+            social_menu=normalized_social,
+            interact_pickup=normalized_interact,
+            reel=normalized_reel,
+        ),
+        None,
+    )
+
+
+def pyautogui_key_name(value: object) -> str | None:
+    normalized = normalize_game_key(value)
+    if normalized is None:
+        return None
+    if normalized in PYAUTOGUI_KEY_NAMES:
+        return PYAUTOGUI_KEY_NAMES[normalized]
+    return normalized.lower()
 
 
 def _is_esc_key(value: object) -> bool:
@@ -119,13 +179,23 @@ def load_settings(path: Path = SETTINGS_PATH) -> AppSettings:
     try:
         hotkeys_payload = payload.get("hotkeys", {}) if isinstance(payload, dict) else {}
         hotkeys, error = validate_hotkey_pair(
-            hotkeys_payload.get("start_fishing"),
-            hotkeys_payload.get("stop_fishing"),
+            hotkeys_payload.get("start_fishing", DEFAULT_SETTINGS.hotkeys.start_fishing),
+            hotkeys_payload.get("stop_fishing", DEFAULT_SETTINGS.hotkeys.stop_fishing),
         )
         if hotkeys is None:
             LOGGER.warning("Invalid hotkey settings in %s: %s", path, error)
-            return DEFAULT_SETTINGS
-        return AppSettings(hotkeys=hotkeys)
+            hotkeys = DEFAULT_SETTINGS.hotkeys
+
+        game_keys_payload = payload.get("game_keys", {}) if isinstance(payload, dict) else {}
+        game_keys, error = validate_game_keys(
+            game_keys_payload.get("social_menu", DEFAULT_SETTINGS.game_keys.social_menu),
+            game_keys_payload.get("interact_pickup", DEFAULT_SETTINGS.game_keys.interact_pickup),
+            game_keys_payload.get("reel", DEFAULT_SETTINGS.game_keys.reel),
+        )
+        if game_keys is None:
+            LOGGER.warning("Invalid game key settings in %s: %s", path, error)
+            game_keys = DEFAULT_SETTINGS.game_keys
+        return AppSettings(hotkeys=hotkeys, game_keys=game_keys)
     except Exception:
         LOGGER.warning("Failed to load settings; using defaults", exc_info=True)
         return DEFAULT_SETTINGS
@@ -136,7 +206,12 @@ def save_settings(settings: AppSettings, path: Path = SETTINGS_PATH) -> bool:
         "hotkeys": {
             "start_fishing": settings.hotkeys.start_fishing,
             "stop_fishing": settings.hotkeys.stop_fishing,
-        }
+        },
+        "game_keys": {
+            "social_menu": settings.game_keys.social_menu,
+            "interact_pickup": settings.game_keys.interact_pickup,
+            "reel": settings.game_keys.reel,
+        },
     }
     temp_path = path.with_suffix(path.suffix + ".tmp")
     try:

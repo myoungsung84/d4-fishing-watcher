@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 
 from app import config
+from app.settings import GameKeySettings, load_settings
 
 from features.fishing.actions import click_point, move_point, press_key
 from features.fishing.detector import (
@@ -121,6 +122,19 @@ class FishingTotalStats:
 
 
 @dataclass(frozen=True)
+class FishingStatsSnapshot:
+    session_cast_count: int
+    session_catch_count: int
+    session_fail_count: int
+    session_run_seconds: int
+    total_cast_count: int
+    total_catch_count: int
+    total_run_seconds: int
+    is_running: bool
+    recent_result: str
+
+
+@dataclass(frozen=True)
 class UserLogEntry:
     time: str
     type: str
@@ -173,6 +187,23 @@ roi_state_lock = threading.Lock()
 current_window_rect: Optional[WindowRect] = None
 window_rect_lock = threading.Lock()
 clear_roi_on_stop = True
+runtime_game_keys: GameKeySettings = load_settings().game_keys
+runtime_game_keys_lock = threading.Lock()
+
+
+def set_runtime_game_keys(game_keys: GameKeySettings) -> None:
+    global runtime_game_keys
+    with runtime_game_keys_lock:
+        runtime_game_keys = game_keys
+    log_info(
+        "[SETTINGS] game keys updated "
+        f"social={game_keys.social_menu} interact={game_keys.interact_pickup} reel={game_keys.reel}"
+    )
+
+
+def get_runtime_game_keys() -> GameKeySettings:
+    with runtime_game_keys_lock:
+        return runtime_game_keys
 
 
 def refresh_diablo_window_rect(log_missing: bool = True) -> Optional[WindowRect]:
@@ -656,6 +687,36 @@ def increment_cast_count() -> None:
 def increment_catch_count() -> None:
     with session_stats_lock:
         session_stats.catch_count += 1
+
+
+def get_fishing_stats_snapshot() -> FishingStatsSnapshot:
+    with session_stats_lock:
+        session_cast_count = max(0, int(session_stats.cast_count))
+        session_catch_count = max(0, int(session_stats.catch_count))
+        session_started_at = session_stats.started_at
+        session_is_running = session_stats.is_running
+        total_cast_count = max(0, int(total_stats.total_cast_count))
+        total_catch_count = max(0, int(total_stats.total_catch_count))
+        total_run_seconds = max(0, int(total_stats.total_run_seconds))
+
+    session_fail_count = max(0, session_cast_count - session_catch_count)
+    session_run_seconds = 0
+    if session_started_at is not None and session_is_running:
+        session_run_seconds = int(max(0, (datetime.now() - session_started_at).total_seconds()))
+    recent_result = "--"
+    if session_cast_count > 0:
+        recent_result = "성공" if session_catch_count >= session_cast_count else "진행 중"
+    return FishingStatsSnapshot(
+        session_cast_count=session_cast_count,
+        session_catch_count=session_catch_count,
+        session_fail_count=session_fail_count,
+        session_run_seconds=session_run_seconds,
+        total_cast_count=total_cast_count,
+        total_catch_count=total_catch_count,
+        total_run_seconds=total_run_seconds,
+        is_running=session_is_running,
+        recent_result=recent_result,
+    )
 
 
 def load_fishing_stats() -> None:
@@ -1190,12 +1251,44 @@ def _build_start_search_rois() -> List[tuple[str, Optional[tuple[int, int, int, 
     return _dedupe_rois(rois)
 
 
+def _clamp_start_template_scale(scale: float) -> float:
+    return max(0.65, min(1.35, scale))
+
+
+def _estimate_start_template_scale() -> float:
+    width, height = get_local_window_size()
+    width_ratio = width / max(1, config.CONFIG.fallback_base_width)
+    height_ratio = height / max(1, config.CONFIG.fallback_base_height)
+    return _clamp_start_template_scale((width_ratio + height_ratio) / 2.0)
+
+
+def build_start_template_scale_candidates() -> tuple[float, ...]:
+    estimated = _estimate_start_template_scale()
+    candidates = {
+        1.0,
+        _clamp_start_template_scale(estimated),
+        _clamp_start_template_scale(estimated - 0.10),
+        _clamp_start_template_scale(estimated + 0.10),
+        _clamp_start_template_scale(estimated - 0.18),
+        _clamp_start_template_scale(estimated + 0.18),
+    }
+    for configured_scale in config.CONFIG.start_template_scales:
+        if abs(configured_scale - 1.0) < 0.001:
+            candidates.add(1.0)
+    return tuple(sorted(candidates))
+
+
 def detect_start_icon(template: TemplateImage) -> DetectionResult:
     log_info("[CAST] start icon search")
 
     best_result: Optional[DetectionResult] = None
     best_source = "none"
     best_scale = 1.0
+    scale_candidates = build_start_template_scale_candidates()
+    log_dim(
+        "[START] scale candidates "
+        f"window={get_local_window_size()} scales={','.join(f'{scale:.2f}' for scale in scale_candidates)}"
+    )
     for source, roi in _build_start_search_rois():
         frame_bgr, capture_region = capture_screen(roi)
         result, scale = find_best_match_multi_scale(
@@ -1203,7 +1296,7 @@ def detect_start_icon(template: TemplateImage) -> DetectionResult:
             capture_region,
             template,
             config.CONFIG.start_threshold,
-            config.CONFIG.start_template_scales,
+            scale_candidates,
         )
         center = get_detection_screen_center(result, capture_region)
         log_dim(
@@ -1781,9 +1874,10 @@ def loot_items(
         return False
 
     character_x, character_y = get_character_reference_point()
+    game_keys = get_runtime_game_keys()
 
     log_info(
-        f"[LOOT] R 키 입력 시작: base=({character_x}, {character_y}), count={config.CONFIG.loot_key_press_count}"
+        f"[LOOT] {game_keys.interact_pickup} 키 입력 시작: base=({character_x}, {character_y}), count={config.CONFIG.loot_key_press_count}"
     )
 
     for press_index in range(config.CONFIG.loot_key_press_count):
@@ -1807,15 +1901,15 @@ def loot_items(
             return True
 
         press_key(
-            config.CONFIG.loot_key,
+            game_keys.interact_pickup,
             dry_run=config.CONFIG.dry_run,
         )
-        log_dim(f"[LOOT] press {config.CONFIG.loot_key.upper()} ({press_index + 1}/{config.CONFIG.loot_key_press_count})")
+        log_dim(f"[LOOT] press {game_keys.interact_pickup} ({press_index + 1}/{config.CONFIG.loot_key_press_count})")
 
         if config.CONFIG.loot_key_interval > 0:
             time.sleep(config.CONFIG.loot_key_interval)
 
-    log_info("[LOOT] R 키 입력 완료")
+    log_info(f"[LOOT] {game_keys.interact_pickup} 키 입력 완료")
     add_user_log("아이템 확인 완료", "loot")
     return False
 
@@ -2004,15 +2098,15 @@ def click_pickup_probe(base_x: int, base_y: int, is_first: bool) -> None:
         dry_run=config.CONFIG.dry_run,
     )
     
-    # Press R key to attempt pickup
+    game_keys = get_runtime_game_keys()
     press_key(
-        config.CONFIG.loot_key,
+        game_keys.interact_pickup,
         dry_run=config.CONFIG.dry_run,
     )
     
     if config.CONFIG.ready_debug_log:
         log_dim(
-            f"[PICKUP] move local=({x}, {y}) screen={move_point_screen} press {config.CONFIG.loot_key.upper()}"
+            f"[PICKUP] move local=({x}, {y}) screen={move_point_screen} press {game_keys.interact_pickup}"
         )
 
 
@@ -2482,10 +2576,11 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
         return FishingCycleResult.CANCELLED
 
     active_title = get_active_window_title()
+    game_keys = get_runtime_game_keys()
 
     log_success(f"[WINDOW] Diablo IV active title={active_title!r}")
-    log_info("[CAST] start key press")
-    press_key(config.CONFIG.initial_key, dry_run=config.CONFIG.dry_run)
+    log_info(f"[CAST] social/start key press {game_keys.social_menu}")
+    press_key(game_keys.social_menu, dry_run=config.CONFIG.dry_run)
     start_result = detect_start_icon(start_template)
     if not start_result.found:
         log_dim(f"[CAST] 대기 score={start_result.score:.3f}")
@@ -2545,10 +2640,11 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
         return FishingCycleResult.CANCELLED
 
     if ready_found_during_loot:
-        log_info(f"[REEL] {config.CONFIG.reel_key.upper()} 입력 (ready during loot)")
+        game_keys = get_runtime_game_keys()
+        log_info(f"[REEL] {game_keys.reel} 입력 (ready during loot)")
         increment_catch_count()
         add_user_log("낚아올리는 중", "catch")
-        press_key(config.CONFIG.reel_key, dry_run=config.CONFIG.dry_run)
+        press_key(game_keys.reel, dry_run=config.CONFIG.dry_run)
         log_dim(
             f"[WAIT] 물고기 잡힘/드롭 대기 {config.CONFIG.after_reel_delay_seconds:.1f}초"
         )
@@ -2600,10 +2696,11 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
     if not wait_target_window():
         return FishingCycleResult.CANCELLED
 
-    log_info(f"[REEL] {config.CONFIG.reel_key.upper()} 입력")
+    game_keys = get_runtime_game_keys()
+    log_info(f"[REEL] {game_keys.reel} 입력")
     increment_catch_count()
     add_user_log("낚아올리는 중", "catch")
-    press_key(config.CONFIG.reel_key, dry_run=config.CONFIG.dry_run)
+    press_key(game_keys.reel, dry_run=config.CONFIG.dry_run)
     clear_ready_debug_snapshot()
 
     log_dim(f"[WAIT] 물고기 잡힘/드롭 대기 {config.CONFIG.after_reel_delay_seconds:.1f}초")
@@ -2620,9 +2717,10 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
 
 def handle_fishing_cycle_timeout() -> None:
     if config.CONFIG.ready_timeout_reel_enabled:
+        game_keys = get_runtime_game_keys()
         log_warn("[fishing] bite timeout 30s, pull and recast")
-        log_info(f"[REEL] timeout recovery {config.CONFIG.reel_key.upper()} 입력")
-        press_key(config.CONFIG.reel_key, dry_run=config.CONFIG.dry_run)
+        log_info(f"[REEL] timeout recovery {game_keys.reel} 입력")
+        press_key(game_keys.reel, dry_run=config.CONFIG.dry_run)
         log_dim(
             f"[WAIT] timeout recovery wait {config.CONFIG.ready_timeout_reel_wait:.1f}s"
         )

@@ -38,6 +38,9 @@ class ReadyColorBlob:
     score: float
 
 
+_SCALED_TEMPLATE_CACHE: dict[tuple[str, int, int], tuple[np.ndarray, Optional[np.ndarray]]] = {}
+
+
 def load_template(template_path: Path) -> TemplateImage:
     image = cv2.imread(str(template_path), cv2.IMREAD_UNCHANGED)
     if image is None:
@@ -63,6 +66,24 @@ def load_template(template_path: Path) -> TemplateImage:
 
     height, width = gray.shape[:2]
     return TemplateImage(path=template_path, gray=gray, mask=mask, width=width, height=height)
+
+
+def _get_scaled_template(
+    template: TemplateImage,
+    width: int,
+    height: int,
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    cache_key = (str(template.path), width, height)
+    cached = _SCALED_TEMPLATE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    scaled_template = cv2.resize(template.gray, (width, height))
+    scaled_mask = None
+    if template.mask is not None:
+        scaled_mask = cv2.resize(template.mask, (width, height))
+    _SCALED_TEMPLATE_CACHE[cache_key] = (scaled_template, scaled_mask)
+    return scaled_template, scaled_mask
 
 
 def find_best_match(
@@ -123,6 +144,7 @@ def find_best_match_multi_scale(
     best_result = None
     best_scale = 1.0
     best_score = -1.0
+    frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
     for scale in scales:
         if scale < 0.5:
@@ -130,14 +152,13 @@ def find_best_match_multi_scale(
 
         scaled_width = max(1, int(template.width * scale))
         scaled_height = max(1, int(template.height * scale))
-        scaled_template = cv2.resize(template.gray, (scaled_width, scaled_height))
-        scaled_mask = None
-        if template.mask is not None:
-            scaled_mask = cv2.resize(template.mask, (scaled_width, scaled_height))
+        if scaled_width < 4 or scaled_height < 4:
+            continue
 
-        frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         if frame_gray.shape[0] < scaled_height or frame_gray.shape[1] < scaled_width:
             continue
+
+        scaled_template, scaled_mask = _get_scaled_template(template, scaled_width, scaled_height)
 
         if scaled_mask is not None:
             match_result = cv2.matchTemplate(

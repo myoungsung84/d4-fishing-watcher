@@ -51,19 +51,24 @@ class GlobalHotkeyManager:
         keyboard = self._get_keyboard_module()
         listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         listener.daemon = True
-        listener.start()
 
         with self._lock:
             old_listener = self._listener
+            self._listener = None
+            self._registration = None
+            if old_listener is not None:
+                old_listener.stop()
+            self._modifiers_pressed.clear()
+            self._last_triggered_at.clear()
+
+        listener.start()
+
+        with self._lock:
             self._listener = listener
             self._registration = HotkeyRegistration(
                 start_fishing=hotkeys.start_fishing,
                 stop_fishing=hotkeys.stop_fishing,
             )
-            self._modifiers_pressed.clear()
-            self._last_triggered_at.clear()
-            if old_listener is not None:
-                old_listener.stop()
             LOGGER.info(
                 "Global hotkey listener started: start=%s stop=%s",
                 hotkeys.start_fishing,
@@ -152,14 +157,17 @@ def normalize_tk_key(keysym: str, keycode: int | None = None, state: int = 0) ->
     if state & 0x0004 or state & 0x0008 or state & 0x0001:
         return None, "조합키는 지원하지 않습니다."
 
-    if keycode is not None and 96 <= keycode <= 105:
-        return f"Num{keycode - 96}", None
-
     if keysym == "Escape":
         return None, "ESC는 단축키로 사용할 수 없습니다."
 
     if keysym in {"Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L", "Shift_R"}:
         return None, "Ctrl, Alt, Shift 단독키는 사용할 수 없습니다."
+
+    if keysym.startswith("KP_") and keysym[3:].isdigit():
+        return f"Num{keysym[3:]}", None
+
+    if keycode is not None and 96 <= keycode <= 105:
+        return f"Num{keycode - 96}", None
 
     normalized = normalize_hotkey(keysym)
     if normalized is None:
