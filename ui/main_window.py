@@ -61,19 +61,23 @@ class D4FishingWatcherWindow:
         self.stage_var = tk.StringVar(value=AppStage.IDLE.value)
         self.roi_status_var = tk.StringVar(value="게임 창을 먼저 확인해 주세요")
         self.status_badge_var = tk.StringVar(value="● 확인 필요")
-        self.headline_var = tk.StringVar(value="Diablo IV 창을 찾지 못했습니다")
-        self.detail_var = tk.StringVar(value="게임을 실행한 뒤 다시 확인해 주세요.")
+        self.headline_var = tk.StringVar(value="지금은 준비 중입니다")
+        self.detail_var = tk.StringVar(value="Diablo IV 창을 확인해 주세요.")
         self.last_message_var = tk.StringVar(value="아직 기록이 없습니다.")
         self.hotkey_summary_var = tk.StringVar(value="")
         self.game_key_summary_var = tk.StringVar(value="")
         self.primary_action_var = tk.StringVar(value="낚시 시작")
         self.primary_hint_var = tk.StringVar(value="")
-        self.cast_count_var = tk.StringVar(value="0회")
-        self.catch_count_var = tk.StringVar(value="0회")
-        self.run_time_var = tk.StringVar(value="00:00")
+        self.today_cast_count_var = tk.StringVar(value="0회")
+        self.today_catch_count_var = tk.StringVar(value="0회")
+        self.today_run_time_var = tk.StringVar(value="0분")
+        self.total_cast_count_var = tk.StringVar(value="0회")
+        self.total_catch_count_var = tk.StringVar(value="0회")
+        self.total_run_time_var = tk.StringVar(value="0분")
+        self.run_time_var = tk.StringVar(value="0분")
         self.progress_stage_var = tk.StringVar(value="게임 창 확인 대기")
-        self.recent_result_var = tk.StringVar(value="기록 없음")
-        self.detection_status_var = tk.StringVar(value="대기 중")
+        self.recent_result_var = tk.StringVar(value="아직 기록이 없습니다")
+        self.detection_status_var = tk.StringVar(value="대기")
 
         self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
         self.ui_callbacks: queue.Queue[Callable[[], None]] = queue.Queue()
@@ -113,7 +117,7 @@ class D4FishingWatcherWindow:
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(2, weight=1)
+        self.root.rowconfigure(4, weight=1)
 
         self._configure_styles()
 
@@ -140,7 +144,7 @@ class D4FishingWatcherWindow:
         )
         self.header_settings_button.grid(row=0, column=3, rowspan=2, sticky="e")
 
-        notice = ttk.Frame(self.root, padding=(18, 10), style="Notice.TFrame")
+        notice = ttk.Frame(self.root, padding=(18, 14), style="Notice.TFrame")
         notice.grid(row=1, column=0, sticky="ew", padx=18, pady=(6, 8))
         notice.columnconfigure(0, weight=1)
         ttk.Label(notice, textvariable=self.headline_var, style="NoticeLead.TLabel").grid(row=0, column=0, sticky="w")
@@ -150,84 +154,46 @@ class D4FishingWatcherWindow:
             sticky="ew",
             pady=(3, 0),
         )
-
-        body = ttk.Frame(self.root, padding=(18, 0, 18, 10))
-        body.grid(row=2, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=1, minsize=320)
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
-
-        left = ttk.Frame(body, padding=(16, 14), style="Panel.TFrame")
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        left.columnconfigure(0, weight=1)
-        ttk.Label(left, text="낚시 준비", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(left, text="게임 창 확인, 낚시 위치 설정, 시작 순서로 진행합니다.", style="PanelMuted.TLabel", wraplength=290).grid(
-            row=1,
-            column=0,
-            sticky="ew",
-            pady=(5, 12),
-        )
-
-        readiness = ttk.Frame(left, style="Panel.TFrame")
-        readiness.grid(row=2, column=0, sticky="ew")
-        readiness.columnconfigure(1, weight=1)
-        self._create_status_row(readiness, 0, "게임 창", self.window_status_var)
-        self._create_status_row(readiness, 1, "낚시 위치", self.roi_status_var)
-
         self.primary_button = ttk.Button(
-            left,
+            notice,
             textvariable=self.primary_action_var,
             style="Primary.TButton",
             command=self._on_primary_action,
         )
-        self.primary_button.grid(row=3, column=0, sticky="ew", pady=(18, 0))
-        ttk.Label(left, textvariable=self.primary_hint_var, style="PanelMuted.TLabel").grid(
-            row=4,
-            column=0,
-            sticky="w",
-            pady=(8, 0),
-        )
+        self.primary_button.grid(row=0, column=1, rowspan=2, sticky="e", padx=(18, 0))
+        self.primary_hint_label = ttk.Label(notice, textvariable=self.primary_hint_var, style="NoticeMuted.TLabel")
+        self.primary_hint_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
-        ttk.Separator(left, orient="horizontal").grid(row=5, column=0, sticky="ew", pady=(16, 12))
-        key_summary = ttk.Frame(left, style="Panel.TFrame")
-        key_summary.grid(row=6, column=0, sticky="ew")
-        key_summary.columnconfigure(1, weight=1)
-        self._create_status_row(key_summary, 0, "단축키", self.hotkey_summary_var)
-        self._create_status_row(key_summary, 1, "게임 조작키", self.game_key_summary_var)
-
-        right = ttk.Frame(body, padding=(16, 14), style="Panel.TFrame")
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(3, weight=1)
-        ttk.Label(right, text="진행 상황", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
-
-        progress = ttk.Frame(right, style="Panel.TFrame")
-        progress.grid(row=1, column=0, sticky="ew", pady=(10, 14))
-        progress.columnconfigure(0, weight=1)
-        ttk.Label(progress, textvariable=self.progress_stage_var, style="PanelLead.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(progress, textvariable=self.detail_var, style="PanelMuted.TLabel", wraplength=390).grid(
-            row=1,
-            column=0,
-            sticky="ew",
-            pady=(6, 0),
-        )
-
-        quick_status = ttk.Frame(right, style="Panel.TFrame")
-        quick_status.grid(row=2, column=0, sticky="ew")
-        quick_status.columnconfigure(1, weight=1)
-        self._create_status_row(quick_status, 0, "상태", self.detection_status_var)
-        self._create_status_row(quick_status, 1, "최근 결과", self.recent_result_var)
-
-        spacer = ttk.Frame(right, style="Panel.TFrame")
-        spacer.grid(row=3, column=0, sticky="nsew")
-
-        stats_bar = ttk.Frame(self.root, padding=(18, 9), style="Notice.TFrame")
-        stats_bar.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 14))
+        today = ttk.Frame(self.root, padding=(18, 14), style="Panel.TFrame")
+        today.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
+        today.columnconfigure(0, weight=1)
+        ttk.Label(today, text="오늘의 낚시", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        today_stats = ttk.Frame(today, style="Panel.TFrame")
+        today_stats.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         for column in range(3):
-            stats_bar.columnconfigure(column, weight=1)
-        self._create_stat_pill(stats_bar, 0, self.cast_count_var, "누적 낚시")
-        self._create_stat_pill(stats_bar, 1, self.catch_count_var, "누적 성공")
-        self._create_stat_pill(stats_bar, 2, self.run_time_var, "이번 실행")
+            today_stats.columnconfigure(column, weight=1)
+        self._create_stat_pill(today_stats, 0, self.today_cast_count_var, "시도")
+        self._create_stat_pill(today_stats, 1, self.today_catch_count_var, "성공")
+        self._create_stat_pill(today_stats, 2, self.today_run_time_var, "낚시 시간")
+
+        total = ttk.Frame(self.root, padding=(18, 14), style="Panel.TFrame")
+        total.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 8))
+        total.columnconfigure(0, weight=1)
+        ttk.Label(total, text="전체 기록", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        total_stats = ttk.Frame(total, style="Panel.TFrame")
+        total_stats.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        for column in range(3):
+            total_stats.columnconfigure(column, weight=1)
+        self._create_stat_pill(total_stats, 0, self.total_cast_count_var, "총 낚시")
+        self._create_stat_pill(total_stats, 1, self.total_catch_count_var, "성공")
+        self._create_stat_pill(total_stats, 2, self.total_run_time_var, "총 낚시 시간")
+
+        progress = ttk.Frame(self.root, padding=(18, 14), style="Panel.TFrame")
+        progress.grid(row=4, column=0, sticky="nsew", padx=18, pady=(0, 14))
+        progress.columnconfigure(1, weight=1)
+        self._create_status_row(progress, 0, "지금 하는 일", self.progress_stage_var)
+        self._create_status_row(progress, 1, "최근 결과", self.recent_result_var)
+        self._create_status_row(progress, 2, "이번 실행", self.run_time_var)
 
     def _configure_styles(self) -> None:
         apply_theme(self.root)
@@ -943,19 +909,31 @@ class D4FishingWatcherWindow:
 
     def _refresh_stats(self) -> None:
         snapshot = engine.get_fishing_stats_snapshot()
-        self.cast_count_var.set(f"{snapshot.total_cast_count}회")
-        self.catch_count_var.set(f"{snapshot.total_catch_count}회")
-        self.run_time_var.set(self._format_seconds(snapshot.session_run_seconds))
-        self.recent_result_var.set("기록 없음" if snapshot.recent_result == "--" else snapshot.recent_result)
+        self.today_cast_count_var.set(self._format_count(snapshot.today_cast_count))
+        self.today_catch_count_var.set(self._format_count(snapshot.today_catch_count))
+        self.today_run_time_var.set(self._format_duration(snapshot.today_run_seconds))
+        self.total_cast_count_var.set(self._format_count(snapshot.total_cast_count))
+        self.total_catch_count_var.set(self._format_count(snapshot.total_catch_count))
+        self.total_run_time_var.set(self._format_duration(snapshot.total_run_seconds))
+        self.run_time_var.set(self._format_duration(snapshot.session_run_seconds))
+        self.recent_result_var.set("아직 기록이 없습니다" if snapshot.recent_result == "--" else snapshot.recent_result)
 
     @staticmethod
-    def _format_seconds(seconds: int) -> str:
+    def _format_count(count: int) -> str:
+        return f"{max(0, int(count)):,}회"
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
         seconds = max(0, int(seconds))
-        minutes, seconds_part = divmod(seconds, 60)
+        if seconds <= 0:
+            return "0분"
+        if seconds < 60:
+            return f"{seconds}초"
+        minutes, _seconds_part = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
         if hours > 0:
-            return f"{hours:02d}:{minutes:02d}:{seconds_part:02d}"
-        return f"{minutes:02d}:{seconds_part:02d}"
+            return f"{hours}시간 {minutes}분"
+        return f"{minutes}분"
 
     def _handle_worker_event(self, event: WorkerEvent) -> None:
         payload = event.payload
@@ -1022,18 +1000,18 @@ class D4FishingWatcherWindow:
         if status is RunStatus.RUNNING:
             self.headline_var.set(self.progress_stage_var.get())
             self.primary_action_var.set("낚시 중지")
-            self.primary_hint_var.set(f"{hotkeys.stop_fishing}으로도 중지할 수 있습니다.")
+            self.primary_hint_var.set("")
             self.primary_button.configure(style="Danger.TButton", state=tk.NORMAL)
         elif status is RunStatus.SELECTING_ROI:
             self.headline_var.set("낚시 위치를 설정해 주세요")
             self.detail_var.set("물가의 낚시 아이콘 영역을 드래그해 선택해 주세요.")
             self.primary_action_var.set("위치 설정 취소")
-            self.primary_hint_var.set(f"{hotkeys.stop_fishing} 또는 ESC로 취소할 수 있습니다.")
+            self.primary_hint_var.set("")
             self.primary_button.configure(style="Danger.TButton", state=tk.NORMAL)
         elif status in (RunStatus.CHECKING_WINDOW, RunStatus.STOPPING):
             if status is RunStatus.CHECKING_WINDOW:
                 self.headline_var.set("Diablo IV 창을 확인하는 중입니다")
-                self.detail_var.set("게임 창을 찾으면 낚시 위치 설정으로 이어집니다.")
+                self.detail_var.set("잠시만 기다려 주세요.")
             else:
                 self.headline_var.set("낚시를 중지하는 중입니다")
                 self.detail_var.set("현재 동작을 마무리하고 안전하게 멈춥니다.")
@@ -1042,21 +1020,21 @@ class D4FishingWatcherWindow:
             self.primary_button.configure(style="Primary.TButton", state=tk.DISABLED)
         else:
             if self._detected_window_rect is None:
-                self.headline_var.set("Diablo IV 창을 찾지 못했습니다")
-                self.detail_var.set("게임을 실행한 뒤 다시 확인해 주세요.")
+                self.headline_var.set("지금은 준비 중입니다")
+                self.detail_var.set("Diablo IV 창을 확인해 주세요.")
                 self.primary_action_var.set("게임 창 다시 확인")
-                self.primary_hint_var.set("Diablo IV를 실행한 뒤 다시 확인해 주세요.")
+                self.primary_hint_var.set("")
             elif not roi_ready:
                 self.headline_var.set("낚시 위치를 설정해 주세요")
                 self.detail_var.set("물가의 낚시 아이콘 영역을 선택해 주세요.")
                 self.primary_action_var.set("낚시 위치 설정")
-                self.primary_hint_var.set("위치를 선택하면 낚시가 바로 시작됩니다.")
+                self.primary_hint_var.set("")
             else:
                 if status is RunStatus.STOPPED:
                     self.headline_var.set("낚시를 중지했습니다")
                 else:
                     self.headline_var.set("낚시 준비가 완료되었습니다")
-                self.detail_var.set(f"버튼을 누르거나 {hotkeys.start_fishing}으로 시작할 수 있습니다.")
+                self.detail_var.set("낚시를 시작할 수 있습니다.")
                 self.primary_action_var.set("낚시 시작")
                 self.primary_hint_var.set(f"{hotkeys.start_fishing}으로도 시작할 수 있습니다.")
             self.primary_button.configure(style="Primary.TButton", state=tk.NORMAL)
@@ -1091,12 +1069,12 @@ class D4FishingWatcherWindow:
             AppStage.ROI_SELECTION: "낚시 위치 설정 중",
             AppStage.READY_TO_RUN: "낚시를 시작하는 중",
             AppStage.FIND_WINDOW: "Diablo IV 창 확인 중",
-            AppStage.CAST: "낚싯대를 던지는 중",
+            AppStage.CAST: "낚싯대를 던지고 있습니다",
             AppStage.FIND_BOBBER: "낚시 아이콘을 확인하는 중",
-            AppStage.WAIT_READY: "입질을 기다리는 중",
-            AppStage.REEL: "낚싯대를 회수하는 중",
-            AppStage.LOOT: "아이템을 줍는 중",
-            AppStage.RECAST: "다음 낚시를 준비하는 중",
+            AppStage.WAIT_READY: "입질을 기다리고 있습니다",
+            AppStage.REEL: "낚싯대를 회수하고 있습니다",
+            AppStage.LOOT: "아이템을 줍고 있습니다",
+            AppStage.RECAST: "다음 낚시를 준비하고 있습니다",
             AppStage.STOPPING: "중지 중",
             AppStage.ERROR: "오류가 발생했습니다",
             AppStage.RUNNING: "진행 중",
@@ -1120,11 +1098,11 @@ class D4FishingWatcherWindow:
 
     def _format_status_badge(self, status: RunStatus, stage: Optional[AppStage]) -> str:
         if status is RunStatus.IDLE and self._detected_window_rect is None:
-            return "● 확인 필요"
+            return "● 준비"
         if status in (RunStatus.IDLE, RunStatus.STOPPED) and engine.get_current_fishing_search_roi() is None:
-            return "● 위치 필요"
+            return "● 설정 필요"
         if status in (RunStatus.IDLE, RunStatus.STOPPED):
-            return "● 준비 완료"
+            return "● 준비"
         if status is RunStatus.SELECTING_ROI:
             return "● 위치 설정"
         if status is RunStatus.RUNNING:

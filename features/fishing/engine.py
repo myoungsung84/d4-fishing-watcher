@@ -127,6 +127,9 @@ class FishingStatsSnapshot:
     session_catch_count: int
     session_incomplete_count: int
     session_run_seconds: int
+    today_cast_count: int
+    today_catch_count: int
+    today_run_seconds: int
     total_cast_count: int
     total_catch_count: int
     total_run_seconds: int
@@ -690,11 +693,19 @@ def increment_catch_count() -> None:
 
 
 def get_fishing_stats_snapshot() -> FishingStatsSnapshot:
+    try:
+        _refresh_today_cache_if_needed()
+    except Exception:
+        log_warn("[STATS] 오늘 통계를 갱신하지 못했습니다")
+
     with session_stats_lock:
         session_cast_count = max(0, int(session_stats.cast_count))
         session_catch_count = max(0, int(session_stats.catch_count))
         session_started_at = session_stats.started_at
         session_is_running = session_stats.is_running
+        loaded_today_cast_count = max(0, int(today_cast_count))
+        loaded_today_catch_count = max(0, int(today_catch_count))
+        loaded_today_run_seconds = max(0, int(today_run_seconds))
         total_cast_count = max(0, int(total_stats.total_cast_count))
         total_catch_count = max(0, int(total_stats.total_catch_count))
         total_run_seconds = max(0, int(total_stats.total_run_seconds))
@@ -711,6 +722,9 @@ def get_fishing_stats_snapshot() -> FishingStatsSnapshot:
         session_catch_count=session_catch_count,
         session_incomplete_count=session_incomplete_count,
         session_run_seconds=session_run_seconds,
+        today_cast_count=loaded_today_cast_count,
+        today_catch_count=loaded_today_catch_count,
+        today_run_seconds=loaded_today_run_seconds,
         total_cast_count=total_cast_count,
         total_catch_count=total_catch_count,
         total_run_seconds=total_run_seconds,
