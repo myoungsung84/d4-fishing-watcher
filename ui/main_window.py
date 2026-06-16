@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -7,6 +8,9 @@ from typing import Callable
 
 from app.logger import AppLogger
 from app.state import AppStage, RunStatus, WindowStatus
+from features.fishing.worker import FishingWorker
+
+WorkerEvent = tuple[str, object]
 
 
 class D4FishingWatcherWindow:
@@ -20,11 +24,18 @@ class D4FishingWatcherWindow:
         self.run_status_var = tk.StringVar(value=RunStatus.IDLE.value)
         self.stage_var = tk.StringVar(value=AppStage.IDLE.value)
         self.detail_var = tk.StringVar(value="메인 윈도우 UX 1차 MVP")
+        self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
 
         self.logger = AppLogger(self._append_log_threadsafe)
+        self.worker = FishingWorker(
+            on_log=self._on_worker_log,
+            on_state=self._on_worker_state,
+            on_step=self._on_worker_step,
+        )
 
         self._build_layout()
-        self.logger.log("[BOOT] GUI ready. 기존 자동 낚시 루프는 아직 시작 버튼에 연결하지 않았습니다.")
+        self.root.after(100, self._poll_worker_events)
+        self.logger.log("[BOOT] GUI ready. 낚시 worker 생명주기 연결 완료.")
 
     def run(self) -> None:
         self.root.mainloop()
@@ -144,15 +155,52 @@ class D4FishingWatcherWindow:
         self.logger.log(f"[ERROR] 창 감지 실패: {exc}")
 
     def _on_start(self) -> None:
-        self.run_status_var.set(RunStatus.RUNNING.value)
+        if self.worker.is_running():
+            self.logger.log("[START] worker가 이미 실행 중입니다.")
+            return
+
         self._set_stage(AppStage.READY_TO_RUN)
-        self.logger.log("[START] 1차 MVP에서는 실제 낚시 루프를 시작하지 않습니다.")
-        self.logger.log("[START] 기존 콘솔 루프는 worker 분리 후 연결 예정입니다.")
+        self.run_status_var.set(RunStatus.RUNNING.value)
+        self.logger.log("[START] 낚시 worker 시작 요청")
+        started = self.worker.start()
+        if not started:
+            self.run_status_var.set(RunStatus.RUNNING.value)
 
     def _on_stop(self) -> None:
-        self.run_status_var.set(RunStatus.STOPPED.value)
-        self._set_stage(AppStage.IDLE)
-        self.logger.log("[STOP] 중지 요청 상태로 전환했습니다.")
+        if not self.worker.is_running():
+            self.run_status_var.set(RunStatus.STOPPED.value)
+            self._set_stage(AppStage.IDLE)
+            self.logger.log("[STOP] 실행 중인 worker가 없습니다.")
+            return
+
+        self.run_status_var.set(RunStatus.STOPPING.value)
+        self.logger.log("[STOP] 낚시 worker 중지 요청")
+        self.worker.stop()
+
+    def _on_worker_log(self, message: str) -> None:
+        self.worker_events.put(("log", message))
+
+    def _on_worker_state(self, status: RunStatus) -> None:
+        self.worker_events.put(("state", status))
+
+    def _on_worker_step(self, stage: AppStage) -> None:
+        self.worker_events.put(("step", stage))
+
+    def _poll_worker_events(self) -> None:
+        while True:
+            try:
+                event_type, payload = self.worker_events.get_nowait()
+            except queue.Empty:
+                break
+
+            if event_type == "log":
+                self.logger.log(str(payload))
+            elif event_type == "state" and isinstance(payload, RunStatus):
+                self.run_status_var.set(payload.value)
+            elif event_type == "step" and isinstance(payload, AppStage):
+                self._set_stage(payload)
+
+        self.root.after(100, self._poll_worker_events)
 
     def _set_stage(self, stage: AppStage) -> None:
         self.stage_var.set(stage.value)
