@@ -13,13 +13,14 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 import cv2
 import numpy as np
 
 from app import config
 from app.settings import GameKeySettings, load_settings
+from app.state import AppStage
 
 from features.fishing.actions import click_point, move_point, press_key
 from features.fishing.detector import (
@@ -2577,11 +2578,15 @@ def wait_ready_icon(
         time.sleep(sleep_for)
 
 
-def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
+def run_fishing_cycle(session: FishingSession, on_step: Callable[[AppStage], None] | None = None) -> FishingCycleResult:
     global last_start_icon_pos
     start_template = session.start_template
     ready_template = session.ready_template
     default_ready_roi_local = session.default_ready_roi_local
+
+    def step(stage: AppStage) -> None:
+        if on_step is not None:
+            on_step(stage)
 
     if not wait_target_window():
         return FishingCycleResult.CANCELLED
@@ -2593,6 +2598,7 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
     game_keys = get_runtime_game_keys()
 
     log_success(f"[WINDOW] Diablo IV active title={active_title!r}")
+    step(AppStage.CAST)
     log_info(f"[CAST] social/start key press {game_keys.social_menu}")
     press_key(game_keys.social_menu, dry_run=config.CONFIG.dry_run)
     start_result = detect_start_icon(start_template)
@@ -2640,6 +2646,7 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
         return FishingCycleResult.CANCELLED
 
     log_info("[LOOT] START 클릭 후 아이템 줍기")
+    step(AppStage.LOOT)
     add_user_log("떨어진 아이템 확인 중", "loot")
     loot_ready_roi: tuple[int, int, int, int] | None = (
         active_bobber_roi if config.CONFIG.ready_use_bobber_roi else default_ready_roi_local
@@ -2656,6 +2663,7 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
     if ready_found_during_loot:
         game_keys = get_runtime_game_keys()
         log_info(f"[REEL] {game_keys.reel} 입력 (ready during loot)")
+        step(AppStage.REEL)
         increment_catch_count()
         add_user_log("낚아올리는 중", "catch")
         press_key(game_keys.reel, dry_run=config.CONFIG.dry_run)
@@ -2685,6 +2693,7 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
         return FishingCycleResult.CANCELLED
 
     log_info("[READY] wait start")
+    step(AppStage.WAIT_READY)
     add_user_log("물고기 기다리는 중", "wait")
     ready_wait_result = wait_ready_icon(
         ready_template,
@@ -2712,6 +2721,7 @@ def run_fishing_cycle(session: FishingSession) -> FishingCycleResult:
 
     game_keys = get_runtime_game_keys()
     log_info(f"[REEL] {game_keys.reel} 입력")
+    step(AppStage.REEL)
     increment_catch_count()
     add_user_log("낚아올리는 중", "catch")
     press_key(game_keys.reel, dry_run=config.CONFIG.dry_run)

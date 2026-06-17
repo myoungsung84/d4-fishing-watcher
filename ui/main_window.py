@@ -62,31 +62,40 @@ class WorkerEvent:
 
 
 class D4FishingWatcherWindow:
-    # fishing cycle stage → dot index (0–4)
-    _STAGE_IDX: dict[AppStage, int] = {
-        AppStage.READY_TO_RUN: 0, AppStage.FIND_WINDOW: 0, AppStage.CAST: 0,
-        AppStage.FIND_BOBBER: 1,
+    _UI_STAGE_BY_APP_STAGE: dict[AppStage, int] = {
+        AppStage.CAST: 0,
+        AppStage.LOOT: 1,
+        AppStage.FIND_BOBBER: 2,
         AppStage.WAIT_READY: 2,
         AppStage.REEL: 3,
-        AppStage.LOOT: 4, AppStage.RECAST: 4,
     }
-    _CIRCLE_TEXT: dict[AppStage, tuple[str, str]] = {
-        AppStage.READY_TO_RUN: ("시작", "준비"),  AppStage.FIND_WINDOW: ("창", "확인"),
-        AppStage.CAST: ("낚시", "던짐"),
-        AppStage.FIND_BOBBER: ("찌", "탐색"),
-        AppStage.WAIT_READY: ("입질", "감지"),
-        AppStage.REEL: ("릴", "감기"),
-        AppStage.LOOT: ("전리품", "수집"),  AppStage.RECAST: ("재", "시작"),
+    _CIRCLE_TEXT_BY_APP_STAGE: dict[AppStage, tuple[str, str]] = {
+        AppStage.READY_TO_RUN: ("시작 준비", "낚시 엔진 준비 중"),
+        AppStage.FIND_WINDOW: ("창 확인", "Diablo IV 창 확인 중"),
+        AppStage.CAST: ("낚시 던짐", "낚싯대를 던집니다"),
+        AppStage.FIND_BOBBER: ("입질 대기", "물고기가 물 때까지 기다립니다"),
+        AppStage.WAIT_READY: ("입질 대기", "입질 신호를 기다립니다"),
+        AppStage.REEL: ("회수", "입질 후 낚싯대를 회수합니다"),
+        AppStage.LOOT: ("줍기", "전리품을 주워 인벤토리로 옮깁니다"),
+        AppStage.RECAST: ("다음 준비", "다음 낚시를 준비합니다"),
+        AppStage.STOPPING: ("중지 중", "현재 동작을 마무리합니다"),
+        AppStage.ERROR: ("오류", "확인이 필요합니다"),
     }
-    _STAGE_NAMES = ("낚시 던짐", "찌 탐색", "입질 감지", "릴 감기", "전리품")
+    _UI_STAGE_LABELS = ("낚시 던짐", "줍기", "입질 대기", "회수")
+    _UI_STAGE_DETAILS = (
+        "낚싯대를 던집니다",
+        "전리품을 주워\n인벤토리로 옮깁니다",
+        "물고기가 물 때까지\n기다립니다",
+        "입질 후 낚싯대를\n회수합니다",
+    )
 
     def __init__(self) -> None:
         self._font_family: str = load_pretendard()
         set_windows_app_user_model_id("D4FishingWatcher.App")
         self.root: tk.Tk = tk.Tk()
         self.root.title("D4 Fishing Watcher")
-        self.root.geometry("420x460")
-        self.root.minsize(400, 380)
+        self.root.geometry("650x780")
+        self.root.minsize(620, 720)
         self._icons: TkAppIcons = load_tk_app_icons()
         self._apply_window_icon(self.root)
         apply_windows_window_polish(self.root)
@@ -110,9 +119,6 @@ class D4FishingWatcherWindow:
         self.total_cast_count_var = tk.StringVar(value="0회")
         self.total_catch_count_var = tk.StringVar(value="0회")
         self.total_run_time_var = tk.StringVar(value="0분")
-        self.run_time_var = tk.StringVar(value="0분")
-        self.progress_stage_var = tk.StringVar(value="게임 창 확인 대기")
-        self.recent_result_var = tk.StringVar(value="아직 기록이 없습니다")
         self.detection_status_var = tk.StringVar(value="대기")
 
         self.worker_events: queue.Queue[WorkerEvent] = queue.Queue()
@@ -137,16 +143,18 @@ class D4FishingWatcherWindow:
         engine.load_fishing_stats()
 
         self.status_badge: ttk.Label
+        self.header_settings_button: ttk.Button
         self.primary_button: ttk.Button
         self.primary_hint_label: ttk.Label
-        self._circle_canvas: tk.Canvas
-        self._circle_arc_id: int
-        self._circle_spin_id: int
-        self._circle_text1_id: int
-        self._circle_text2_id: int
-        self._stage_canvas: tk.Canvas
-        self._dot_ids: list[int] = []
-        self._dot_label_ids: list[int] = []
+        self._main_canvas: tk.Canvas
+        self._circle_arc_id: int = 0
+        self._circle_spin_id: int = 0
+        self._circle_title_id: int = 0
+        self._circle_detail_id: int = 0
+        self._stage_dot_ids: list[int] = []
+        self._stage_label_ids: list[int] = []
+        self._stage_detail_ids: list[int] = []
+        self._stage_line_ids: list[int] = []
         self._spin_angle: float = 90.0
         self._spin_running: bool = False
 
@@ -161,10 +169,6 @@ class D4FishingWatcherWindow:
         self.root.after(1000, self._refresh_stats_loop)
         self._notice("프로그램이 준비되었습니다.")
         self._update_controls_for_state()
-        self.root.update_idletasks()
-        req_h = self.root.winfo_reqheight()
-        if req_h > 100:
-            self.root.geometry(f"420x{req_h}")
         self.logger.info("[BOOT] GUI ready. 메인 윈도우 실행 흐름 준비 완료.")
 
     def run(self) -> None:
@@ -173,109 +177,84 @@ class D4FishingWatcherWindow:
     def _build_layout(self) -> None:
         F = self._font_family
         self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(2, weight=1)
         self._configure_styles()
 
-        # === BODY ===
-        body = ttk.Frame(self.root, padding=(16, 13, 16, 0))
-        body.grid(row=0, column=0, sticky="ew")
-        body.columnconfigure(0, weight=1)
+        outer_pad = 18
 
-        # Top bar: status badge (left) + keyboard hotkey btn (right)
-        top_bar = ttk.Frame(body)
-        top_bar.grid(row=0, column=0, sticky="ew")
-        top_bar.columnconfigure(0, weight=1)
-        self.status_badge = ttk.Label(top_bar, textvariable=self.status_badge_var, style="Badge.TLabel")
-        self.status_badge.grid(row=0, column=0, sticky="w")
-        kbd_icon = tk.Canvas(top_bar, width=34, height=24, bg=COLORS["bg"], highlightthickness=0, cursor="hand2")
-        kbd_icon.grid(row=0, column=1, sticky="e")
-        self._draw_kbd_icon(kbd_icon)
-        kbd_icon.bind("<Button-1>", lambda _e: self._open_hotkey_settings_window())
-
-        # State row: headline + detail (left) / action btn + hint (right)
-        state_row = ttk.Frame(body)
-        state_row.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        state_row.columnconfigure(0, weight=1)
-        state_text = ttk.Frame(state_row)
-        state_text.grid(row=0, column=0, sticky="w")
-        ttk.Label(state_text, textvariable=self.headline_var, style="FlatLead.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(state_text, textvariable=self.detail_var, style="FlatMuted.TLabel", wraplength=290).grid(
-            row=1, column=0, sticky="w", pady=(2, 0)
+        header = ttk.Frame(self.root, padding=(outer_pad, 14, outer_pad, 8))
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(1, weight=1)
+        if self._icons.header is not None:
+            icon = ttk.Label(header, image=self._icons.header)
+            icon.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 14))
+        ttk.Label(header, text="D4 Fishing Watcher", style="HeroTitle.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(header, text="Diablo IV 낚시 도우미", style="HeroSubtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        self.status_badge = ttk.Label(header, textvariable=self.status_badge_var, style="Badge.TLabel")
+        self.status_badge.grid(row=0, column=2, rowspan=2, sticky="e", padx=(12, 12))
+        self.header_settings_button = ttk.Button(
+            header,
+            text="설정",
+            command=self._open_hotkey_settings_window,
+            style="Header.TButton",
         )
-        stop_area = ttk.Frame(state_row)
-        stop_area.grid(row=0, column=1, sticky="e", padx=(8, 0))
-        stop_area.columnconfigure(0, weight=1)
+        self.header_settings_button.grid(row=0, column=3, rowspan=2, sticky="e")
+
+        notice = ttk.Frame(self.root, padding=(18, 13), style="Panel.TFrame")
+        notice.grid(row=1, column=0, sticky="ew", padx=outer_pad, pady=(0, 10))
+        notice.columnconfigure(0, weight=1)
+        ttk.Label(notice, textvariable=self.headline_var, style="NoticeLead.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(notice, textvariable=self.detail_var, style="NoticeMuted.TLabel", wraplength=560).grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            pady=(5, 0),
+        )
+        action = ttk.Frame(notice, style="Panel.TFrame")
+        action.grid(row=0, column=1, rowspan=2, sticky="e", padx=(18, 0))
         self.primary_button = ttk.Button(
-            stop_area, textvariable=self.primary_action_var,
-            style="ActionStart.TButton", command=self._on_primary_action,
-            width=4,
+            action,
+            textvariable=self.primary_action_var,
+            style="Primary.TButton",
+            command=self._on_primary_action,
+            width=14,
         )
         self.primary_button.grid(row=0, column=0)
         self.primary_hint_label = ttk.Label(
-            stop_area, textvariable=self.primary_hint_var, style="HintKey.TLabel", anchor="center"
+            action,
+            textvariable=self.primary_hint_var,
+            style="NoticeMuted.TLabel",
+            anchor="center",
         )
-        self.primary_hint_label.grid(row=1, column=0, pady=(2, 0))
+        self.primary_hint_label.grid(row=1, column=0, pady=(5, 0), sticky="ew")
 
-        # Circle progress canvas
-        _CS, _CR, _CC, _CW = 160, 62, 80, 11
-        circ = tk.Canvas(body, width=_CS, height=_CS, bg=COLORS["bg"], highlightthickness=0)
-        circ.grid(row=2, column=0, pady=(18, 0))
-        self._circle_canvas = circ
-        x0, y0, x1, y1 = _CC - _CR, _CC - _CR, _CC + _CR, _CC + _CR
-        inner = _CR - _CW
-        circ.create_oval(_CC - inner, _CC - inner, _CC + inner, _CC + inner, fill="#0a1929", outline="")
-        circ.create_arc(x0, y0, x1, y1, start=90, extent=-359.99, style=tk.ARC, outline=COLORS["panel_alt"], width=_CW)
-        self._circle_arc_id = circ.create_arc(
-            x0, y0, x1, y1, start=90, extent=0, style=tk.ARC, outline=COLORS["accent"], width=_CW
-        )
-        self._circle_spin_id = circ.create_arc(
-            x0, y0, x1, y1, start=90, extent=-40, style=tk.ARC, outline=COLORS["text"], width=3
-        )
-        self._circle_text1_id = circ.create_text(_CC, _CC - 11, text="대기", fill=COLORS["text"], font=(F, 13, "bold"))
-        self._circle_text2_id = circ.create_text(_CC, _CC + 11, text="중", fill=COLORS["muted"], font=(F, 11))
+        main_panel = ttk.Frame(self.root, padding=(0, 0), style="Panel.TFrame")
+        main_panel.grid(row=2, column=0, sticky="nsew", padx=outer_pad, pady=(0, 10))
+        main_panel.columnconfigure(0, weight=1)
+        main_panel.rowconfigure(0, weight=1)
+        self._main_canvas = tk.Canvas(main_panel, height=330, bg=COLORS["panel"], highlightthickness=0)
+        self._main_canvas.grid(row=0, column=0, sticky="nsew")
+        self._main_canvas.bind("<Configure>", self._redraw_main_canvas)
 
-        # Stage dots canvas (388 = 420px window - 2*16 padding)
-        _N, _DW, _DH, _DOT_Y, _LBL_Y, _DOT_R = 5, 388, 32, 6, 15, 3
-        _MG = 22  # left/right margin so edge labels don't clip
-        _SP = (_DW - 2 * _MG) // (_N - 1)
-        dots = tk.Canvas(body, width=_DW, height=_DH, bg=COLORS["bg"], highlightthickness=0)
-        dots.grid(row=3, column=0, pady=(12, 14))
-        self._stage_canvas = dots
-        self._dot_ids = []
-        self._dot_label_ids = []
-        for i in range(_N - 1):
-            dots.create_line(_MG + i * _SP + _DOT_R + 2, _DOT_Y, _MG + (i + 1) * _SP - _DOT_R - 2, _DOT_Y,
-                             fill=COLORS["border"], width=1)
-        _ANCHORS = ("nw", "n", "n", "n", "ne")
-        for i in range(_N):
-            x = _MG + i * _SP
-            did = dots.create_oval(x - _DOT_R, _DOT_Y - _DOT_R, x + _DOT_R, _DOT_Y + _DOT_R,
-                                   fill=COLORS["border"], outline="")
-            lid = dots.create_text(x, _LBL_Y, text=self._STAGE_NAMES[i],
-                                   fill=COLORS["muted"], font=(F, 8), anchor=_ANCHORS[i])
-            self._dot_ids.append(did)
-            self._dot_label_ids.append(lid)
-
-        # === SEPARATOR ===
-        ttk.Separator(self.root, orient="horizontal").grid(row=1, column=0, sticky="ew")
-
-        # === STATS ===
-        stats = ttk.Frame(self.root, padding=(16, 12, 16, 14))
-        stats.grid(row=2, column=0, sticky="ew")
+        stats = ttk.Frame(self.root, padding=(18, 10), style="Panel.TFrame")
+        stats.grid(row=3, column=0, sticky="ew", padx=outer_pad, pady=(0, 16))
+        stats.columnconfigure(0, minsize=72)
         for col in (1, 2, 3):
-            stats.columnconfigure(col, weight=1)
-        ttk.Label(stats, text="", style="FlatMuted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 14))
-        ttk.Label(stats, text="시도", style="FlatMuted.TLabel").grid(row=0, column=1, sticky="w")
-        ttk.Label(stats, text="성공", style="FlatMuted.TLabel").grid(row=0, column=2, sticky="w")
-        ttk.Label(stats, text="시간", style="FlatMuted.TLabel").grid(row=0, column=3, sticky="w")
-        ttk.Label(stats, text="오늘", style="FlatStatSection.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 14), pady=(5, 0))
-        ttk.Label(stats, textvariable=self.today_cast_count_var, style="FlatStatValue.TLabel").grid(row=1, column=1, sticky="w", pady=(5, 0))
-        ttk.Label(stats, textvariable=self.today_catch_count_var, style="FlatStatValue.TLabel").grid(row=1, column=2, sticky="w", pady=(5, 0))
-        ttk.Label(stats, textvariable=self.today_run_time_var, style="FlatStatValue.TLabel").grid(row=1, column=3, sticky="w", pady=(5, 0))
-        ttk.Separator(stats, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 0))
-        ttk.Label(stats, text="전체", style="FlatStatSection.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 14), pady=(6, 0))
-        ttk.Label(stats, textvariable=self.total_cast_count_var, style="FlatStatValue.TLabel").grid(row=3, column=1, sticky="w", pady=(6, 0))
-        ttk.Label(stats, textvariable=self.total_catch_count_var, style="FlatStatValue.TLabel").grid(row=3, column=2, sticky="w", pady=(6, 0))
-        ttk.Label(stats, textvariable=self.total_run_time_var, style="FlatStatValue.TLabel").grid(row=3, column=3, sticky="w", pady=(6, 0))
+            stats.columnconfigure(col, weight=1, uniform="stats")
+        ttk.Label(stats, text="", style="StatsHead.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 12))
+        ttk.Label(stats, text="시도", style="StatsHead.TLabel", anchor="e").grid(row=0, column=1, sticky="ew")
+        ttk.Label(stats, text="성공", style="StatsHead.TLabel", anchor="e").grid(row=0, column=2, sticky="ew")
+        ttk.Label(stats, text="시간", style="StatsHead.TLabel", anchor="e").grid(row=0, column=3, sticky="ew")
+        ttk.Separator(stats, orient="horizontal").grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        ttk.Label(stats, text="오늘", style="StatsRowHead.TLabel").grid(row=2, column=0, sticky="w", pady=(9, 0))
+        ttk.Label(stats, textvariable=self.today_cast_count_var, style="StatsValue.TLabel", anchor="e").grid(row=2, column=1, sticky="ew", pady=(9, 0))
+        ttk.Label(stats, textvariable=self.today_catch_count_var, style="StatsValue.TLabel", anchor="e").grid(row=2, column=2, sticky="ew", pady=(9, 0))
+        ttk.Label(stats, textvariable=self.today_run_time_var, style="StatsValue.TLabel", anchor="e").grid(row=2, column=3, sticky="ew", pady=(9, 0))
+        ttk.Separator(stats, orient="horizontal").grid(row=3, column=0, columnspan=4, sticky="ew", pady=(9, 0))
+        ttk.Label(stats, text="전체", style="StatsRowHead.TLabel").grid(row=4, column=0, sticky="w", pady=(9, 0))
+        ttk.Label(stats, textvariable=self.total_cast_count_var, style="StatsValue.TLabel", anchor="e").grid(row=4, column=1, sticky="ew", pady=(9, 0))
+        ttk.Label(stats, textvariable=self.total_catch_count_var, style="StatsValue.TLabel", anchor="e").grid(row=4, column=2, sticky="ew", pady=(9, 0))
+        ttk.Label(stats, textvariable=self.total_run_time_var, style="StatsValue.TLabel", anchor="e").grid(row=4, column=3, sticky="ew", pady=(9, 0))
 
     def _configure_styles(self) -> None:
         apply_theme(self.root, font_family=self._font_family)
@@ -291,56 +270,235 @@ class D4FishingWatcherWindow:
         for kx in (8, 14, 20):
             c.create_rectangle(kx - 3, 14, kx + 3, 18, fill=COLORS["muted"], outline="")
 
+    def _redraw_main_canvas(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        canvas = self._main_canvas
+        canvas.delete("all")
+        width = max(1, canvas.winfo_width())
+        height = max(1, canvas.winfo_height())
+        F = self._font_family
+        cx = width // 2
+        top_y = 16
+        top_h = max(190, int(height * 0.62))
+        box_w = 190 if width < 700 else 204
+        box_h = 112
+        box_gap = 24
+        box_x = width - box_w - 18
+        max_radius_for_box = box_x - cx - box_gap
+        cy = top_y + top_h // 2
+        radius = max(76, min(98, top_h // 2 - 14, max_radius_for_box))
+        ring_width = 12
+
+        self._draw_round_rect(canvas, 1, 1, width - 2, height - 2, 10, COLORS["panel"], COLORS["panel"])
+        canvas.create_oval(cx - radius + 16, cy - radius + 16, cx + radius - 16, cy + radius - 16, fill="#0a1828", outline="")
+        canvas.create_arc(
+            cx - radius,
+            cy - radius,
+            cx + radius,
+            cy + radius,
+            start=90,
+            extent=-359.99,
+            style=tk.ARC,
+            outline=COLORS["panel_alt"],
+            width=ring_width,
+        )
+        self._circle_arc_id = canvas.create_arc(
+            cx - radius,
+            cy - radius,
+            cx + radius,
+            cy + radius,
+            start=90,
+            extent=0,
+            style=tk.ARC,
+            outline=COLORS["accent"],
+            width=ring_width,
+        )
+        self._circle_spin_id = canvas.create_arc(
+            cx - radius,
+            cy - radius,
+            cx + radius,
+            cy + radius,
+            start=self._spin_angle,
+            extent=-42,
+            style=tk.ARC,
+            outline="#75d7ff",
+            width=4,
+        )
+        self._circle_title_id = canvas.create_text(cx, cy - 12, text="대기 중", fill=COLORS["text"], font=(F, 22, "bold"))
+        self._circle_detail_id = canvas.create_text(cx, cy + 23, text="게임 창 확인 대기", fill=COLORS["muted"], font=(F, 12), width=radius * 2 - 28)
+
+        box_y = top_y + max(0, (top_h - box_h) // 2)
+        if box_x >= cx + radius + box_gap:
+            self._draw_round_rect(canvas, box_x, box_y, box_x + box_w, box_y + box_h, 8, COLORS["panel_soft"], COLORS["border"])
+            canvas.create_text(box_x + 18, box_y + 28, text="단축키", fill=COLORS["text"], font=(F, 11, "bold"), anchor="w")
+            key_x = box_x + box_w - 20
+            label_x = box_x + 18
+            canvas.create_text(label_x, box_y + 68, text="낚시 시작/중지", fill=COLORS["muted"], font=(F, 9), anchor="w")
+            canvas.create_text(key_x, box_y + 68, text=self._settings.hotkeys.start_fishing, fill=COLORS["text"], font=(F, 11, "bold"), anchor="e")
+            canvas.create_text(label_x, box_y + 90, text="낚시 위치 설정", fill=COLORS["muted"], font=(F, 9), anchor="w")
+            canvas.create_text(key_x, box_y + 94, text=self._settings.hotkeys.stop_fishing, fill=COLORS["text"], font=(F, 11, "bold"), anchor="e")
+
+        stage_y = max(cy + radius + 22, int(height * 0.67))
+        self._draw_stage_progress(canvas, width, height, stage_y)
+        self._update_circle(self._current_stage)
+        self._update_stage_progress(self._current_stage)
+
+    def _draw_round_rect(
+        self,
+        canvas: tk.Canvas,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+        radius: int,
+        fill: str,
+        outline: str,
+    ) -> None:
+        canvas.create_rectangle(x0 + radius, y0, x1 - radius, y1, fill=fill, outline=fill)
+        canvas.create_rectangle(x0, y0 + radius, x1, y1 - radius, fill=fill, outline=fill)
+        canvas.create_arc(x0, y0, x0 + radius * 2, y0 + radius * 2, start=90, extent=90, fill=fill, outline=fill)
+        canvas.create_arc(x1 - radius * 2, y0, x1, y0 + radius * 2, start=0, extent=90, fill=fill, outline=fill)
+        canvas.create_arc(x1 - radius * 2, y1 - radius * 2, x1, y1, start=270, extent=90, fill=fill, outline=fill)
+        canvas.create_arc(x0, y1 - radius * 2, x0 + radius * 2, y1, start=180, extent=90, fill=fill, outline=fill)
+        canvas.create_line(x0 + radius, y0, x1 - radius, y0, fill=outline)
+        canvas.create_line(x0 + radius, y1, x1 - radius, y1, fill=outline)
+        canvas.create_line(x0, y0 + radius, x0, y1 - radius, fill=outline)
+        canvas.create_line(x1, y0 + radius, x1, y1 - radius, fill=outline)
+
+    def _draw_stage_progress(self, canvas: tk.Canvas, width: int, height: int, y: int) -> None:
+        F = self._font_family
+        label_y = y + 40
+        detail_y = y + 65
+        margin = max(58, min(88, int(width * 0.11)))
+        available = max(1, width - margin * 2)
+        step = available / 3
+        self._stage_dot_ids = []
+        self._stage_label_ids = []
+        self._stage_detail_ids = []
+        self._stage_line_ids = []
+        positions = [int(margin + step * i) for i in range(4)]
+        for i in range(3):
+            line_id = canvas.create_line(positions[i] + 32, y, positions[i + 1] - 32, y, fill=COLORS["border"], width=2)
+            self._stage_line_ids.append(line_id)
+        for index, x in enumerate(positions):
+            dot_id = canvas.create_oval(x - 17, y - 17, x + 17, y + 17, fill=COLORS["panel_alt"], outline=COLORS["border"], width=2)
+            label_id = canvas.create_text(x, label_y, text=self._UI_STAGE_LABELS[index], fill=COLORS["text"], font=(F, 11, "bold"))
+            detail_id = canvas.create_text(
+                x,
+                detail_y,
+                text=self._UI_STAGE_DETAILS[index],
+                fill=COLORS["muted"],
+                font=(F, 10),
+                justify="center",
+                width=128,
+            )
+            self._stage_dot_ids.append(dot_id)
+            self._stage_label_ids.append(label_id)
+            self._stage_detail_ids.append(detail_id)
+
     def _animate_spin(self) -> None:
         if not self._spin_running:
-            self._circle_canvas.itemconfigure(self._circle_spin_id, extent=0)
+            if self._circle_spin_id:
+                self._main_canvas.itemconfigure(self._circle_spin_id, extent=0)
             return
         self._spin_angle = (self._spin_angle - 9) % 360
-        self._circle_canvas.itemconfigure(self._circle_spin_id, start=self._spin_angle, extent=-40)
+        if self._circle_spin_id:
+            self._main_canvas.itemconfigure(self._circle_spin_id, start=self._spin_angle, extent=-42)
         self.root.after(55, self._animate_spin)
 
     def _update_circle(self, stage: AppStage | None) -> None:
-        is_running = self._worker_status is RunStatus.RUNNING
-        if stage is not None and is_running:
-            idx = self._STAGE_IDX.get(stage, 0)
-            extent = -((idx + 1) * 72)
-            t1, t2 = self._CIRCLE_TEXT.get(stage, ("낚시", "중"))
+        if self._circle_arc_id == 0:
+            return
+        status = self._worker_status
+        show_ring = False
+        if status is RunStatus.RUNNING and stage is not None:
+            active = self._UI_STAGE_BY_APP_STAGE.get(stage)
+            if active is not None:
+                extent = -((active + 1) * 90)
+                show_ring = True
+            elif stage in (AppStage.RECAST, AppStage.STOPPING):
+                extent = -18
+                show_ring = True
+            else:
+                extent = 0
+            title, detail = self._CIRCLE_TEXT_BY_APP_STAGE.get(stage, ("낚시 중", "진행 중입니다"))
+        elif status is RunStatus.STOPPED:
+            extent = 0
+            title, detail = "중지됨", ""
+        elif status is RunStatus.ERROR:
+            extent = 0
+            title, detail = "오류", "확인이 필요합니다"
+        elif status is RunStatus.CHECKING_WINDOW:
+            extent = 0
+            title, detail = "확인 중", "게임 창을 확인합니다"
+        elif status is RunStatus.STOPPING:
+            extent = -300
+            show_ring = True
+            title, detail = "중지 중", "현재 동작을 마무리합니다"
+        elif status is RunStatus.SELECTING_ROI:
+            extent = 0
+            title, detail = "위치 설정", "낚시 위치 선택 대기"
+        elif self._detected_window_rect is None:
+            extent = 0
+            title, detail = "대기 중", "게임 창 확인 대기"
+        elif engine.get_current_fishing_search_roi() is None:
+            extent = 0
+            title, detail = "설정 필요", "낚시 위치를 설정해 주세요"
         else:
             extent = 0
-            status = self._worker_status
-            if status is RunStatus.STOPPED:
-                t1, t2 = "중지", "됨"
-            elif status is RunStatus.ERROR:
-                t1, t2 = "오류", "발생"
-            elif status in (RunStatus.CHECKING_WINDOW, RunStatus.STOPPING):
-                t1, t2 = "처리", "중"
-            elif self._detected_window_rect is None:
-                t1, t2 = "대기", "중"
-            elif engine.get_current_fishing_search_roi() is None:
-                t1, t2 = "설정", "필요"
-            else:
-                t1, t2 = "준비", "완료"
-        self._circle_canvas.itemconfigure(self._circle_arc_id, extent=extent if extent != 0 else 0)
-        self._circle_canvas.itemconfigure(self._circle_text1_id, text=t1)
-        self._circle_canvas.itemconfigure(self._circle_text2_id, text=t2)
-        if is_running and not self._spin_running:
+            title, detail = "준비 완료", "낚시를 시작할 수 있습니다"
+        self._main_canvas.itemconfigure(self._circle_arc_id, extent=extent if show_ring else 0)
+        self._main_canvas.itemconfigure(self._circle_title_id, text=title)
+        self._main_canvas.itemconfigure(self._circle_detail_id, text=detail)
+        should_spin = show_ring
+        if should_spin and not self._spin_running:
             self._spin_running = True
             self._animate_spin()
-        elif not is_running and self._spin_running:
+        elif not should_spin:
             self._spin_running = False
+            if self._circle_spin_id:
+                self._main_canvas.itemconfigure(self._circle_spin_id, extent=0)
 
-    def _update_stage_dots(self, stage: AppStage | None) -> None:
-        active = self._STAGE_IDX.get(stage, -1) if (stage and self._worker_status is RunStatus.RUNNING) else -1
-        for i, (did, lid) in enumerate(zip(self._dot_ids, self._dot_label_ids)):
-            if i < active:
-                dot_color, lbl_color = COLORS["accent_dark"], COLORS["muted"]
-            elif i == active:
-                dot_color, lbl_color = COLORS["accent"], COLORS["accent"]
+    def _update_stage_progress(self, stage: AppStage | None) -> None:
+        if not self._stage_dot_ids:
+            return
+        active = -1
+        if self._worker_status is RunStatus.RUNNING and stage is not None:
+            active = self._UI_STAGE_BY_APP_STAGE.get(stage, -1)
+        for index, dot_id in enumerate(self._stage_dot_ids):
+            if 0 <= active and index < active:
+                fill = COLORS["accent_dark"]
+                outline = COLORS["accent"]
+                text = "✓"
+                label_color = COLORS["text"]
+                detail_color = COLORS["muted"]
+            elif index == active:
+                fill = COLORS["accent_dark"]
+                outline = COLORS["accent"]
+                text = "●"
+                label_color = COLORS["text"]
+                detail_color = COLORS["text"]
             else:
-                dot_color, lbl_color = COLORS["border"], COLORS["muted"]
-            self._stage_canvas.itemconfigure(did, fill=dot_color)
-            self._stage_canvas.itemconfigure(lid, fill=lbl_color)
-
+                fill = COLORS["panel_alt"]
+                outline = COLORS["border"]
+                text = "○"
+                label_color = COLORS["muted"]
+                detail_color = COLORS["muted"]
+            self._main_canvas.itemconfigure(dot_id, fill=fill, outline=outline)
+            x0, y0, x1, y1 = self._main_canvas.coords(dot_id)
+            dot_text_tag = f"stage-dot-text-{index}"
+            self._main_canvas.delete(dot_text_tag)
+            self._main_canvas.create_text(
+                (x0 + x1) / 2,
+                (y0 + y1) / 2,
+                text=text,
+                fill=COLORS["text"] if index <= active else COLORS["muted"],
+                font=(self._font_family, 11, "bold"),
+                tags=dot_text_tag,
+            )
+            self._main_canvas.itemconfigure(self._stage_label_ids[index], fill=label_color)
+            self._main_canvas.itemconfigure(self._stage_detail_ids[index], fill=detail_color)
+        for index, line_id in enumerate(self._stage_line_ids):
+            self._main_canvas.itemconfigure(line_id, fill=COLORS["accent_dark"] if 0 <= active and index < active else COLORS["border"])
 
     def _register_hotkeys_on_startup(self) -> None:
         try:
@@ -390,7 +548,8 @@ class D4FishingWatcherWindow:
         window.withdraw()
         window.title("설정")
         window.configure(bg=COLORS["bg"])
-        window.resizable(False, False)
+        window.resizable(True, True)
+        window.minsize(540, 500)
         window.transient(self.root)
 
         start_var = tk.StringVar(value=self._settings.hotkeys.start_fishing)
@@ -403,12 +562,13 @@ class D4FishingWatcherWindow:
 
         frame = ttk.Frame(window, padding=(18, 16), style="Dialog.TFrame")
         frame.grid(row=0, column=0, sticky="nsew")
-        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
         window.columnconfigure(0, weight=1)
         window.rowconfigure(0, weight=1)
 
         header = ttk.Frame(frame, style="Dialog.TFrame")
-        header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         header.columnconfigure(0, weight=1)
         ttk.Label(header, text="설정", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
@@ -418,12 +578,39 @@ class D4FishingWatcherWindow:
             wraplength=420,
         ).grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
-        program_frame = ttk.LabelFrame(frame, text="프로그램 단축키", padding=(12, 10))
-        program_frame.grid(row=1, column=0, columnspan=3, sticky="ew")
+        content_canvas = tk.Canvas(frame, bg=COLORS["panel"], highlightthickness=0)
+        content_scrollbar = ttk.Scrollbar(frame, orient="vertical", command=content_canvas.yview)
+        content_canvas.configure(yscrollcommand=content_scrollbar.set)
+        content_canvas.grid(row=1, column=0, sticky="nsew")
+        content_scrollbar.grid(row=1, column=1, sticky="ns", padx=(8, 0))
+
+        content_frame = ttk.Frame(content_canvas, style="Dialog.TFrame")
+        content_window_id = content_canvas.create_window(0, 0, window=content_frame, anchor="nw")
+        content_frame.columnconfigure(0, weight=1)
+
+        def sync_scroll_region(_event: tk.Event[tk.Misc] | None = None) -> None:
+            bbox = content_canvas.bbox("all")
+            if bbox is not None:
+                content_canvas.configure(scrollregion=bbox)
+
+        def sync_content_width(event: tk.Event[tk.Misc]) -> None:
+            content_canvas.itemconfigure(content_window_id, width=event.width)
+
+        def on_mouse_wheel(event: tk.Event[tk.Misc]) -> str:
+            content_canvas.yview_scroll(-1 * int(event.delta / 120), "units")
+            return "break"
+
+        content_frame.bind("<Configure>", sync_scroll_region)
+        content_canvas.bind("<Configure>", sync_content_width)
+        content_canvas.bind("<MouseWheel>", on_mouse_wheel)
+        content_frame.bind("<MouseWheel>", on_mouse_wheel)
+
+        program_frame = ttk.LabelFrame(content_frame, text="프로그램 단축키", padding=(12, 10))
+        program_frame.grid(row=0, column=0, sticky="ew")
         program_frame.columnconfigure(1, weight=1)
 
-        game_frame = ttk.LabelFrame(frame, text="Diablo IV 조작키", padding=(12, 10))
-        game_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        game_frame = ttk.LabelFrame(content_frame, text="Diablo IV 조작키", padding=(12, 10))
+        game_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         game_frame.columnconfigure(1, weight=1)
 
         ttk.Label(program_frame, text="낚시 시작", style="InfoLabel.TLabel").grid(row=0, column=0, sticky="w")
@@ -459,16 +646,15 @@ class D4FishingWatcherWindow:
         self._create_key_setting_row(game_frame, 1, "상호작용 / 줍기", interact_var, lambda: begin_capture("interact"))
         self._create_key_setting_row(game_frame, 2, "낚싯대 회수", reel_var, lambda: begin_capture("reel"))
 
-        ttk.Label(frame, textvariable=message_var, style="DialogMuted.TLabel", wraplength=420).grid(
-            row=3,
+        ttk.Label(content_frame, textvariable=message_var, style="DialogMuted.TLabel", wraplength=420).grid(
+            row=2,
             column=0,
-            columnspan=3,
             sticky="ew",
             pady=(12, 0),
         )
 
         button_frame = ttk.Frame(frame, style="Dialog.TFrame")
-        button_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        button_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         button_frame.columnconfigure(1, weight=1)
         ttk.Button(button_frame, text="기본값 복원", width=12, command=lambda: restore_defaults()).grid(
             row=0,
@@ -597,7 +783,8 @@ class D4FishingWatcherWindow:
         window.bind("<KeyPress>", on_key_press)
         window.protocol("WM_DELETE_WINDOW", close_window)
         window.update_idletasks()
-        self._center_child_window(window, width=520, height=445)
+        sync_scroll_region()
+        self._center_child_window(window, width=560, height=540)
         self._apply_window_icon(window)
         window.deiconify()
         apply_windows_window_polish(window)
@@ -1005,8 +1192,6 @@ class D4FishingWatcherWindow:
         self.total_cast_count_var.set(self._format_count(snapshot.total_cast_count))
         self.total_catch_count_var.set(self._format_count(snapshot.total_catch_count))
         self.total_run_time_var.set(self._format_duration(snapshot.total_run_seconds))
-        self.run_time_var.set(self._format_duration(snapshot.session_run_seconds))
-        self.recent_result_var.set("아직 기록이 없습니다" if snapshot.recent_result == "--" else snapshot.recent_result)
 
     @staticmethod
     def _format_count(count: int) -> str:
@@ -1078,8 +1263,6 @@ class D4FishingWatcherWindow:
         self.status_badge_var.set(self._format_status_badge(status, stage))
         if stage is not None:
             self.stage_var.set(self._format_stage(stage))
-            if status is not RunStatus.STOPPED:
-                self.progress_stage_var.set(self._format_stage(stage))
             if status is RunStatus.RUNNING:
                 self.detail_var.set(self._format_stage_detail(stage))
         self.detection_status_var.set(self._format_detection_status(status, stage))
@@ -1092,29 +1275,29 @@ class D4FishingWatcherWindow:
 
         if status is RunStatus.RUNNING:
             self.headline_var.set("낚시가 진행 중입니다")
-            self.primary_action_var.set("■")
-            self.primary_hint_var.set(hotkeys.stop_fishing)
-            self.primary_button.configure(style="ActionStop.TButton", state=tk.NORMAL)
+            self.primary_action_var.set("낚시 중지")
+            self.primary_hint_var.set(f"{hotkeys.stop_fishing}으로도 중지할 수 있습니다.")
+            self.primary_button.configure(style="Danger.TButton", state=tk.NORMAL)
         elif status is RunStatus.SELECTING_ROI:
             self.headline_var.set("낚시 위치를 설정해 주세요")
             self.detail_var.set("물가의 낚시 아이콘 영역을 드래그해 선택해 주세요.")
-            self.primary_action_var.set("✕")
+            self.primary_action_var.set("위치 설정 취소")
             self.primary_hint_var.set("")
-            self.primary_button.configure(style="ActionStop.TButton", state=tk.NORMAL)
+            self.primary_button.configure(style="Danger.TButton", state=tk.NORMAL)
         elif status in (RunStatus.CHECKING_WINDOW, RunStatus.STOPPING):
             if status is RunStatus.CHECKING_WINDOW:
-                self.headline_var.set("창 확인 중입니다")
+                self.headline_var.set("Diablo IV 창을 확인하는 중입니다")
                 self.detail_var.set("잠시만 기다려 주세요.")
             else:
-                self.headline_var.set("중지하는 중입니다")
+                self.headline_var.set("낚시를 중지하는 중입니다")
                 self.detail_var.set("현재 동작을 마무리하고 멈춥니다.")
-            self.primary_action_var.set("⋯")
+            self.primary_action_var.set("처리 중")
             self.primary_hint_var.set("")
-            self.primary_button.configure(style="ActionStart.TButton", state=tk.DISABLED)
+            self.primary_button.configure(style="Primary.TButton", state=tk.DISABLED)
         else:
             if self._detected_window_rect is None:
                 self.headline_var.set("Diablo IV 창이 필요합니다")
-                self.detail_var.set("게임을 먼저 실행해 주세요.")
+                self.detail_var.set("게임을 먼저 실행한 뒤 낚시를 시작해 주세요.")
                 self.primary_hint_var.set("")
             elif not roi_ready:
                 self.headline_var.set("낚시 위치를 설정해 주세요")
@@ -1123,9 +1306,9 @@ class D4FishingWatcherWindow:
             else:
                 self.headline_var.set("낚시를 중지했습니다" if status is RunStatus.STOPPED else "낚시 준비 완료")
                 self.detail_var.set("낚시를 시작할 수 있습니다.")
-                self.primary_hint_var.set(hotkeys.start_fishing)
-            self.primary_action_var.set("▶")
-            self.primary_button.configure(style="ActionStart.TButton", state=tk.NORMAL)
+                self.primary_hint_var.set(f"{hotkeys.start_fishing}으로도 시작할 수 있습니다.")
+            self.primary_action_var.set("낚시 시작")
+            self.primary_button.configure(style="Primary.TButton", state=tk.NORMAL)
 
         badge_style = "Badge.TLabel"
         if status is RunStatus.RUNNING:
@@ -1136,11 +1319,9 @@ class D4FishingWatcherWindow:
             badge_style = "DangerBadge.TLabel"
         self.status_badge.configure(style=badge_style)
 
-        if status is RunStatus.STOPPED:
-            self.progress_stage_var.set("중지됨")
-
-        self._update_circle(self._current_stage if status is RunStatus.RUNNING else None)
-        self._update_stage_dots(self._current_stage if status is RunStatus.RUNNING else None)
+        active_stage = self._current_stage if status is RunStatus.RUNNING else None
+        self._update_circle(active_stage)
+        self._update_stage_progress(active_stage)
 
     @staticmethod
     def _format_run_status(status: RunStatus) -> str:

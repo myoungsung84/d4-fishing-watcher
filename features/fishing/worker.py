@@ -122,7 +122,7 @@ class FishingWorker:
                 engine.refresh_diablo_window_rect(log_missing=True)
                 session.default_ready_roi_local = engine.get_default_ready_roi_local()
 
-                result = engine.run_fishing_cycle(session)
+                result = engine.run_fishing_cycle(session, on_step=self._step)
 
                 if result is engine.FishingCycleResult.CANCELLED:
                     self._step(AppStage.STOPPING)
