@@ -65,8 +65,8 @@ class D4FishingWatcherWindow:
         set_windows_app_user_model_id("D4FishingWatcher.App")
         self.root: tk.Tk = tk.Tk()
         self.root.title("D4 Fishing Watcher")
-        self.root.geometry("900x640")
-        self.root.minsize(740, 560)
+        self.root.geometry("520x400")
+        self.root.minsize(460, 340)
         self._icons: TkAppIcons = load_tk_app_icons()
         self._apply_window_icon(self.root)
         apply_windows_window_polish(self.root)
@@ -119,6 +119,8 @@ class D4FishingWatcherWindow:
         self.header_settings_button: ttk.Button
         self.primary_button: ttk.Button
         self.primary_hint_label: ttk.Label
+        self._progress_frame: ttk.Frame
+        self._progress_frame_visible: bool = False
 
         self._build_layout()
         self._set_runtime_state(RunStatus.IDLE, AppStage.IDLE)
@@ -131,6 +133,10 @@ class D4FishingWatcherWindow:
         self.root.after(1000, self._refresh_stats_loop)
         self._notice("프로그램이 준비되었습니다.")
         self._update_controls_for_state()
+        self.root.update_idletasks()
+        req_h = self.root.winfo_reqheight()
+        if req_h > 100:
+            self.root.geometry(f"520x{req_h}")
         self.logger.info("[BOOT] GUI ready. 메인 윈도우 실행 흐름 준비 완료.")
 
     def run(self) -> None:
@@ -138,83 +144,84 @@ class D4FishingWatcherWindow:
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(4, weight=1)
 
         self._configure_styles()
 
-        header = ttk.Frame(self.root, padding=(18, 10, 18, 6))
+        # --- Header ---
+        header = ttk.Frame(self.root, padding=(14, 10, 14, 8))
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
         if self._icons.header is not None:
             icon = ttk.Label(header, image=self._icons.header)
             icon.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 10))
-
         ttk.Label(header, text="D4 Fishing Watcher", style="AppName.TLabel").grid(row=0, column=1, sticky="w")
-        ttk.Label(header, text="Diablo IV 낚시 도우미", style="Muted.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(header, text="Diablo IV 낚시 도우미", style="Muted.TLabel").grid(row=1, column=1, sticky="w")
         self.status_badge = ttk.Label(
             header,
             textvariable=self.status_badge_var,
             style="Badge.TLabel",
             anchor="e",
         )
-        self.status_badge.grid(row=0, column=2, rowspan=2, sticky="e", padx=(14, 10))
+        self.status_badge.grid(row=0, column=2, rowspan=2, sticky="e", padx=(8, 8))
         self.header_settings_button = ttk.Button(
             header,
             text="설정",
             command=self._open_hotkey_settings_window,
+            style="Small.TButton",
         )
         self.header_settings_button.grid(row=0, column=3, rowspan=2, sticky="e")
 
-        notice = ttk.Frame(self.root, padding=(18, 14), style="Notice.TFrame")
-        notice.grid(row=1, column=0, sticky="ew", padx=18, pady=(6, 8))
-        notice.columnconfigure(0, weight=1)
-        ttk.Label(notice, textvariable=self.headline_var, style="NoticeLead.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(notice, textvariable=self.detail_var, style="NoticeMuted.TLabel", wraplength=760).grid(
-            row=1,
-            column=0,
-            sticky="ew",
-            pady=(3, 0),
+        ttk.Separator(self.root, orient="horizontal").grid(row=1, column=0, sticky="ew")
+
+        # --- State / Action (flat, full-width button below text) ---
+        action = ttk.Frame(self.root, padding=(18, 16, 18, 16))
+        action.grid(row=2, column=0, sticky="ew")
+        action.columnconfigure(0, weight=1)
+        ttk.Label(action, textvariable=self.headline_var, style="FlatLead.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(action, textvariable=self.detail_var, style="FlatMuted.TLabel", wraplength=440).grid(
+            row=1, column=0, sticky="ew", pady=(3, 12)
         )
         self.primary_button = ttk.Button(
-            notice,
+            action,
             textvariable=self.primary_action_var,
             style="Primary.TButton",
             command=self._on_primary_action,
         )
-        self.primary_button.grid(row=0, column=1, rowspan=2, sticky="e", padx=(18, 0))
-        self.primary_hint_label = ttk.Label(notice, textvariable=self.primary_hint_var, style="NoticeMuted.TLabel")
-        self.primary_hint_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.primary_button.grid(row=2, column=0, sticky="ew")
+        self.primary_hint_label = ttk.Label(action, textvariable=self.primary_hint_var, style="FlatMuted.TLabel")
+        self.primary_hint_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
 
-        today = ttk.Frame(self.root, padding=(18, 14), style="Panel.TFrame")
-        today.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
-        today.columnconfigure(0, weight=1)
-        ttk.Label(today, text="오늘의 낚시", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
-        today_stats = ttk.Frame(today, style="Panel.TFrame")
-        today_stats.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        for column in range(3):
-            today_stats.columnconfigure(column, weight=1)
-        self._create_stat_pill(today_stats, 0, self.today_cast_count_var, "시도")
-        self._create_stat_pill(today_stats, 1, self.today_catch_count_var, "성공")
-        self._create_stat_pill(today_stats, 2, self.today_run_time_var, "낚시 시간")
+        ttk.Separator(self.root, orient="horizontal").grid(row=3, column=0, sticky="ew")
 
-        total = ttk.Frame(self.root, padding=(18, 14), style="Panel.TFrame")
-        total.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 8))
-        total.columnconfigure(0, weight=1)
-        ttk.Label(total, text="전체 기록", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
-        total_stats = ttk.Frame(total, style="Panel.TFrame")
-        total_stats.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        for column in range(3):
-            total_stats.columnconfigure(column, weight=1)
-        self._create_stat_pill(total_stats, 0, self.total_cast_count_var, "총 낚시")
-        self._create_stat_pill(total_stats, 1, self.total_catch_count_var, "성공")
-        self._create_stat_pill(total_stats, 2, self.total_run_time_var, "총 낚시 시간")
+        # --- Stats (flat, no panel background) ---
+        stats = ttk.Frame(self.root, padding=(18, 12, 18, 12))
+        stats.grid(row=4, column=0, sticky="ew")
+        for col in (1, 2, 3):
+            stats.columnconfigure(col, weight=1)
 
-        progress = ttk.Frame(self.root, padding=(18, 14), style="Panel.TFrame")
-        progress.grid(row=4, column=0, sticky="nsew", padx=18, pady=(0, 14))
-        progress.columnconfigure(1, weight=1)
-        self._create_status_row(progress, 0, "지금 하는 일", self.progress_stage_var)
-        self._create_status_row(progress, 1, "최근 결과", self.recent_result_var)
-        self._create_status_row(progress, 2, "이번 실행", self.run_time_var)
+        ttk.Label(stats, text="", style="FlatMuted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 18))
+        ttk.Label(stats, text="시도", style="FlatMuted.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(stats, text="성공", style="FlatMuted.TLabel").grid(row=0, column=2, sticky="w")
+        ttk.Label(stats, text="시간", style="FlatMuted.TLabel").grid(row=0, column=3, sticky="w")
+
+        ttk.Label(stats, text="오늘", style="FlatStatSection.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 18), pady=(6, 0))
+        ttk.Label(stats, textvariable=self.today_cast_count_var, style="FlatStatValue.TLabel").grid(row=1, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(stats, textvariable=self.today_catch_count_var, style="FlatStatValue.TLabel").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Label(stats, textvariable=self.today_run_time_var, style="FlatStatValue.TLabel").grid(row=1, column=3, sticky="w", pady=(6, 0))
+
+        ttk.Label(stats, text="전체", style="FlatStatSection.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 18), pady=(4, 0))
+        ttk.Label(stats, textvariable=self.total_cast_count_var, style="FlatStatValue.TLabel").grid(row=2, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(stats, textvariable=self.total_catch_count_var, style="FlatStatValue.TLabel").grid(row=2, column=2, sticky="w", pady=(4, 0))
+        ttk.Label(stats, textvariable=self.total_run_time_var, style="FlatStatValue.TLabel").grid(row=2, column=3, sticky="w", pady=(4, 0))
+
+        # --- Progress (panel bg for visual separation; shown only during/after fishing) ---
+        self._progress_frame = ttk.Frame(self.root, padding=(18, 12, 18, 12), style="Panel.TFrame")
+        self._progress_frame.grid(row=5, column=0, sticky="ew")
+        self._progress_frame.grid_remove()  # hidden until fishing starts; shown via _set_progress_visible()
+        self._progress_frame.columnconfigure(1, weight=1)
+        self._create_status_row(self._progress_frame, 0, "현재", self.progress_stage_var)
+        self._create_status_row(self._progress_frame, 1, "최근 결과", self.recent_result_var)
+        self._create_status_row(self._progress_frame, 2, "이번 실행", self.run_time_var)
 
     def _configure_styles(self) -> None:
         apply_theme(self.root)
@@ -222,48 +229,19 @@ class D4FishingWatcherWindow:
     def _apply_window_icon(self, window: tk.Tk | tk.Toplevel) -> None:
         self._icons.apply_to(window)
 
-    def _create_info_row(
-        self,
-        parent: ttk.Frame,
-        row: int,
-        label_text: str,
-        value_var: tk.StringVar,
-    ) -> None:
-        label = ttk.Label(parent, text=label_text, style="InfoLabel.TLabel")
-        label.grid(row=row, column=0, sticky="w", pady=(10 if row else 0, 0))
-        value = ttk.Label(parent, textvariable=value_var, style="InfoValue.TLabel", wraplength=430)
-        value.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=(10 if row else 0, 0))
-
-    def _create_stat_card(
-        self,
-        parent: ttk.Frame,
-        column: int,
-        value_var: tk.StringVar,
-        label_text: str,
-    ) -> None:
-        card = ttk.Frame(parent, padding=(14, 12), style="PanelAlt.TFrame")
-        card.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 8, 0))
-        card.columnconfigure(0, weight=1)
-        ttk.Label(card, textvariable=value_var, style="CardValue.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(card, text=label_text, style="CardTitle.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
-
-    def _create_status_card(
-        self,
-        parent: ttk.Frame,
-        column: int,
-        label_text: str,
-        value_var: tk.StringVar,
-    ) -> None:
-        card = ttk.Frame(parent, padding=(14, 12), style="PanelAlt.TFrame")
-        card.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 8, 0))
-        card.columnconfigure(0, weight=1)
-        ttk.Label(card, text=label_text, style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(card, textvariable=value_var, style="StatusValue.TLabel", wraplength=120).grid(
-            row=1,
-            column=0,
-            sticky="w",
-            pady=(6, 0),
-        )
+    def _set_progress_visible(self, visible: bool) -> None:
+        if visible == self._progress_frame_visible:
+            return
+        self._progress_frame_visible = visible
+        if visible:
+            self._progress_frame.grid()
+        else:
+            self._progress_frame.grid_remove()
+        self.root.update_idletasks()
+        req_h = self.root.winfo_reqheight()
+        w = self.root.winfo_width()
+        if req_h > 100 and w > 100:
+            self.root.geometry(f"{w}x{req_h}")
 
     def _create_status_row(
         self,
@@ -278,25 +256,13 @@ class D4FishingWatcherWindow:
             sticky="w",
             pady=(0 if row == 0 else 9, 0),
         )
-        ttk.Label(parent, textvariable=value_var, style="PanelValue.TLabel", wraplength=260).grid(
+        ttk.Label(parent, textvariable=value_var, style="PanelValue.TLabel", wraplength=360).grid(
             row=row,
             column=1,
             sticky="ew",
             padx=(18, 0),
             pady=(0 if row == 0 else 9, 0),
         )
-
-    def _create_stat_pill(
-        self,
-        parent: ttk.Frame,
-        column: int,
-        value_var: tk.StringVar,
-        label_text: str,
-    ) -> None:
-        frame = ttk.Frame(parent, style="Panel.TFrame")
-        frame.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
-        ttk.Label(frame, textvariable=value_var, style="SmallStatValue.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(frame, text=label_text, style="SmallStatLabel.TLabel").grid(row=1, column=0, sticky="w")
 
     def _register_hotkeys_on_startup(self) -> None:
         try:
@@ -762,6 +728,26 @@ class D4FishingWatcherWindow:
         window.bind("<ButtonPress-3>", lambda _event=None: self._finish_roi_selection(None))
         window.focus_force()
 
+    def _focus_game_window(self) -> None:
+        try:
+            import win32gui
+
+            keywords = ("diablo iv", "디아블로 iv")
+            handles: list[int] = []
+
+            def _cb(hwnd: int, _: object) -> bool:
+                title = win32gui.GetWindowText(hwnd).lower()
+                if any(k in title for k in keywords):
+                    handles.append(hwnd)
+                return True
+
+            win32gui.EnumWindows(_cb, None)
+            if handles:
+                win32gui.SetForegroundWindow(handles[0])
+                LOGGER.debug("[FOCUS] Diablo IV 창으로 포커스 이동")
+        except Exception:
+            LOGGER.debug("[FOCUS] 게임 창 포커스 이동 실패", exc_info=True)
+
     def _finish_roi_selection(self, roi: RoiRect | None) -> None:
         window = self._roi_window
         self._roi_window = None
@@ -797,6 +783,7 @@ class D4FishingWatcherWindow:
         self._refresh_roi_status(f"설정 완료: {width} x {height} (x={x}, y={y})")
         self._notice("낚시 위치가 설정되었습니다.")
         self.logger.info(f"[ROI] 감지 영역 설정 완료: local x={x} y={y} w={width} h={height}")
+        self._focus_game_window()
         self._start_worker_after_roi()
 
     def _start_worker_after_roi(self) -> None:
@@ -930,9 +917,13 @@ class D4FishingWatcherWindow:
 
     def _refresh_stats(self) -> None:
         snapshot = engine.get_fishing_stats_snapshot()
-        self.today_cast_count_var.set(self._format_count(snapshot.today_cast_count))
-        self.today_catch_count_var.set(self._format_count(snapshot.today_catch_count))
-        self.today_run_time_var.set(self._format_duration(snapshot.today_run_seconds))
+        # today_* globals accumulate only at session end; add live session data while running
+        live_cast = snapshot.session_cast_count if snapshot.is_running else 0
+        live_catch = snapshot.session_catch_count if snapshot.is_running else 0
+        live_run = snapshot.session_run_seconds if snapshot.is_running else 0
+        self.today_cast_count_var.set(self._format_count(snapshot.today_cast_count + live_cast))
+        self.today_catch_count_var.set(self._format_count(snapshot.today_catch_count + live_catch))
+        self.today_run_time_var.set(self._format_duration(snapshot.today_run_seconds + live_run))
         self.total_cast_count_var.set(self._format_count(snapshot.total_cast_count))
         self.total_catch_count_var.set(self._format_count(snapshot.total_catch_count))
         self.total_run_time_var.set(self._format_duration(snapshot.total_run_seconds))
@@ -1007,7 +998,8 @@ class D4FishingWatcherWindow:
         self.status_badge_var.set(self._format_status_badge(status, stage))
         if stage is not None:
             self.stage_var.set(self._format_stage(stage))
-            self.progress_stage_var.set(self._format_stage(stage))
+            if status is not RunStatus.STOPPED:
+                self.progress_stage_var.set(self._format_stage(stage))
             if status is RunStatus.RUNNING:
                 self.detail_var.set(self._format_stage_detail(stage))
         self.detection_status_var.set(self._format_detection_status(status, stage))
@@ -1041,14 +1033,12 @@ class D4FishingWatcherWindow:
             self.primary_button.configure(style="Primary.TButton", state=tk.DISABLED)
         else:
             if self._detected_window_rect is None:
-                self.headline_var.set("지금은 준비 중입니다")
-                self.detail_var.set("Diablo IV 창을 확인해 주세요.")
-                self.primary_action_var.set("게임 창 다시 확인")
+                self.headline_var.set("Diablo IV 창이 필요합니다")
+                self.detail_var.set("게임을 먼저 실행한 뒤 낚시를 시작해 주세요.")
                 self.primary_hint_var.set("")
             elif not roi_ready:
                 self.headline_var.set("낚시 위치를 설정해 주세요")
                 self.detail_var.set("물가의 낚시 아이콘 영역을 선택해 주세요.")
-                self.primary_action_var.set("낚시 위치 설정")
                 self.primary_hint_var.set("")
             else:
                 if status is RunStatus.STOPPED:
@@ -1056,8 +1046,8 @@ class D4FishingWatcherWindow:
                 else:
                     self.headline_var.set("낚시 준비가 완료되었습니다")
                 self.detail_var.set("낚시를 시작할 수 있습니다.")
-                self.primary_action_var.set("낚시 시작")
                 self.primary_hint_var.set(f"{hotkeys.start_fishing}으로도 시작할 수 있습니다.")
+            self.primary_action_var.set("낚시 시작")
             self.primary_button.configure(style="Primary.TButton", state=tk.NORMAL)
 
         badge_style = "Badge.TLabel"
@@ -1068,6 +1058,14 @@ class D4FishingWatcherWindow:
         elif status is RunStatus.ERROR:
             badge_style = "DangerBadge.TLabel"
         self.status_badge.configure(style=badge_style)
+
+        # When stopped, set a clear current-state label before the frame becomes visible
+        if status is RunStatus.STOPPED:
+            self.progress_stage_var.set("중지됨")
+
+        # Progress frame: show when fishing is active or just finished; hide in idle/setup states
+        progress_visible = status in (RunStatus.RUNNING, RunStatus.STOPPING, RunStatus.STOPPED, RunStatus.ERROR)
+        self._set_progress_visible(progress_visible)
 
     @staticmethod
     def _format_run_status(status: RunStatus) -> str:
@@ -1122,25 +1120,23 @@ class D4FishingWatcherWindow:
         return labels.get(stage, "낚시가 진행 중입니다.")
 
     def _format_status_badge(self, status: RunStatus, stage: AppStage | None) -> str:
-        if status is RunStatus.IDLE and self._detected_window_rect is None:
-            return "● 준비"
-        if status in (RunStatus.IDLE, RunStatus.STOPPED) and engine.get_current_fishing_search_roi() is None:
-            return "● 설정 필요"
-        if status in (RunStatus.IDLE, RunStatus.STOPPED):
-            return "● 준비"
-        if status is RunStatus.SELECTING_ROI:
-            return "● 위치 설정"
+        if status is RunStatus.CHECKING_WINDOW:
+            return "● 확인 중"
         if status is RunStatus.RUNNING:
             return "● 낚시 중"
+        if status is RunStatus.SELECTING_ROI:
+            return "● 위치 설정"
         if status is RunStatus.STOPPING:
             return "● 중지 중"
+        if status is RunStatus.ERROR:
+            return "● 오류"
+        if status is RunStatus.IDLE and self._detected_window_rect is None:
+            return "● 대기 중"
+        if status in (RunStatus.IDLE, RunStatus.STOPPED) and engine.get_current_fishing_search_roi() is None:
+            return "● 설정 필요"
         if status is RunStatus.STOPPED:
             return "● 중지됨"
-        if status is RunStatus.ERROR:
-            return "● 오류 발생"
-        if stage is AppStage.ROI_SELECTION:
-            return "● 위치 설정"
-        return "● 대기"
+        return "● 준비"
 
     @staticmethod
     def _format_detection_status(status: RunStatus, stage: AppStage | None) -> str:

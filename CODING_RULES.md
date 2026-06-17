@@ -217,6 +217,32 @@ VS Code/Pylance Problems와 CLI pyright 결과가 다를 수 있으므로, 최�
 
 CLI에서 진단 출력이 없어도 VS Code Problems에 남는 경고가 있으면 완료로 보지 않는다.
 
+### Python 타입 검사 기준
+
+`python -m compileall`은 문법 검사이며 타입 검사가 아니다.
+
+import smoke test는 import 및 초기 로딩 검사이며 타입 검사가 아니다.
+
+Pylance 오류 확인이 필요한 작업은 반드시 Pyright 계열 검사 결과 또는 VS Code/Pylance Problems의 실제 진단 내용을 기준으로 판단한다.
+
+타입 오류 정리 작업을 `compileall` 성공만으로 완료 처리하지 않는다.
+
+import smoke test 성공을 타입 검사 성공으로 보고하지 않는다.
+
+VS Code Problems에 error 수준 진단이 남아 있으면 완료로 보고하지 않는다.
+
+타입 오류 작업을 시작할 때는 코드를 수정하기 전에 실제 진단 목록을 먼저 작성한다.
+
+진단 목록에는 다음을 포함한다.
+
+- 파일
+- 줄 번호
+- Pylance/Pyright 오류 코드
+- 전체 오류 메시지
+- 실제 원인
+
+오류 개수만 보고 추측성으로 수정하지 않는다.
+
 사용자가 개별 경고 메시지를 전달해야만 수정되는 방식은 실패로 간주한다.
 
 Codex는 전체 타입 흐름을 보고 같은 패턴의 Optional 경고를 함께 찾아야 한다.
@@ -275,9 +301,11 @@ def capture_screen_bgr(...) -> np.ndarray:
 Pylance 경고 처리 완료 보고에는 다음을 포함한다.
 
 - Codex가 확인한 경고 유형 요약
+- 작업 전 실제 진단 목록
 - 타입 흐름상 원인이 된 파일/함수
 - 호출부 임시 처리 여부
 - 원천 함수 타입 정리 여부
+- 실행한 Pyright 계열 타입 검사 명령
 - 남은 경고 여부
 
 ## 6. LazyModule 사용 기준
@@ -350,11 +378,61 @@ python -m app.main
 
 ## 11. 검증 명령
 
-작업 후 기본 검증:
+타입 오류 정리 작업에서는 타입 검사를 가장 먼저 실행한다.
+
+프로젝트에 `pyright` 또는 `basedpyright`가 설치되어 있으면 해당 CLI를 사용한다.
+
+설치되어 있지 않으면 런타임 의존성에 임의로 추가하지 않는다.
+
+현재 프로젝트에서는 일회성 검사로 다음 명령을 사용할 수 있다.
+
+```powershell
+pnpm dlx pyright@latest ui --pythonversion 3.9 --pythonplatform Windows
+```
+
+검사 범위가 UI가 아니면 마지막 경로 인자를 작업 범위에 맞게 바꾼다.
+
+Pylance/Pyright 설정 파일이 있으면 타입 검사 전에 확인한다.
+
+확인 대상:
+
+- pyrightconfig.json
+- pyproject.toml
+- .vscode/settings.json
+- requirements.txt
+- requirements-dev.txt
+
+특히 다음 설정이 있는지 확인한다.
+
+- pythonVersion
+- pythonPlatform
+- typeCheckingMode
+- extraPaths
+- venvPath
+- venv
+- reportUnknownMemberType
+- reportUnknownArgumentType
+- reportOptionalMemberAccess
+- reportArgumentType
+- reportAssignmentType
+- reportReturnType
+- reportGeneralTypeIssues
+
+VS Code가 사용하는 Python 인터프리터와 검증 명령의 인터프리터가 같은지도 확인한다.
+
+현재 프로젝트 인터프리터:
+
+```powershell
+.\.venv\Scripts\python.exe
+```
+
+문법 검사:
 
 ```bash
 python -m compileall .
 ```
+
+`compileall`은 타입 검사가 아니며, Pylance/Pyright 오류 해결 여부를 판단하는 기준으로 사용하지 않는다.
 
 import smoke test:
 
@@ -365,6 +443,8 @@ python -c "import core"
 python -c "import features.fishing"
 python -c "import ui"
 ```
+
+import smoke test는 import 및 초기 로딩 검사이며, Pylance/Pyright 오류 해결 여부를 판단하는 기준으로 사용하지 않는다.
 
 root Python 파일 확인:
 
@@ -413,6 +493,7 @@ VS Code Problems 탭 기준으로 별도 확인한다.
 - 메인 윈도우 시작/중지 흐름 변경 여부:
 
 5. 검증 결과
+- Pyright/Pylance 타입 검사:
 - python -m compileall .:
 - import smoke test:
 - root *.py 존재 여부:
